@@ -1,0 +1,10 @@
+[2023-06-28 02:00:10,309] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:00:10,309] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:00:10,309] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:00:10,309] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:00:10,309] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:00:10,309] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:00:10,309] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:00:10,309] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+{'loss': 1.8508, 'learning_rate': 1.0526315789473685e-06, 'epoch': 0.0}
+{'loss': 1.8018, 'learning_rate': 2.105263157894737e-06, 'epoch': 0.01}

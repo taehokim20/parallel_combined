@@ -1,0 +1,98 @@
+[2023-06-26 22:57:51,935] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-26 22:57:51,951] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-26 22:57:51,951] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-26 22:57:51,951] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-26 22:57:51,952] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-26 22:57:51,959] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-26 22:57:51,960] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-26 22:57:51,960] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[06/26/23 22:57:56] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:525       
+                             set_device                                                                                                                                        
+                    INFO     colossalai - colossalai - INFO: process rank 4 is bound to device 4                                                                               
+[06/26/23 22:57:56] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:525       
+                             set_device                                                                                                                                        
+                    INFO     colossalai - colossalai - INFO: process rank 0 is bound to device 0                                                                               
+[06/26/23 22:57:56] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:525       
+                             set_device                                                                                                                                        
+                    INFO     colossalai - colossalai - INFO: process rank 5 is bound to device 5                                                                               
+[06/26/23 22:57:56] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:525       
+                             set_device                                                                                                                                        
+                    INFO     colossalai - colossalai - INFO: process rank 2 is bound to device 2                                                                               
+[06/26/23 22:57:56] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:525       
+                             set_device                                                                                                                                        
+                    INFO     colossalai - colossalai - INFO: process rank 6 is bound to device 6                                                                               
+[06/26/23 22:57:56] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:525       
+                             set_device                                                                                                                                        
+                    INFO     colossalai - colossalai - INFO: process rank 7 is bound to device 7                                                                               
+[06/26/23 22:57:56] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:525       
+                             set_device                                                                                                                                        
+                    INFO     colossalai - colossalai - INFO: process rank 3 is bound to device 3                                                                               
+[06/26/23 22:57:56] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:525       
+                             set_device                                                                                                                                        
+                    INFO     colossalai - colossalai - INFO: process rank 1 is bound to device 1                                                                               
+[06/26/23 22:58:01] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:561       
+                             set_seed                                                                                                                                          
+[06/26/23 22:58:01] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:561       
+                             set_seed                                                                                                                                          
+                    INFO     colossalai - colossalai - INFO: initialized seed on rank 7, numpy: 0, python random: 0, ParallelMode.DATA: 0, ParallelMode.TENSOR: 0,the default  
+                             parallel seed is ParallelMode.DATA.                                                                                                               
+                    INFO     colossalai - colossalai - INFO: initialized seed on rank 5, numpy: 0, python random: 0, ParallelMode.DATA: 0, ParallelMode.TENSOR: 0,the default  
+                             parallel seed is ParallelMode.DATA.                                                                                                               
+[06/26/23 22:58:01] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:561       
+                             set_seed                                                                                                                                          
+[06/26/23 22:58:01] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:561       
+                             set_seed                                                                                                                                          
+                    INFO     colossalai - colossalai - INFO: initialized seed on rank 4, numpy: 0, python random: 0, ParallelMode.DATA: 0, ParallelMode.TENSOR: 0,the default  
+                             parallel seed is ParallelMode.DATA.                                                                                                               
+                    INFO     colossalai - colossalai - INFO: initialized seed on rank 6, numpy: 0, python random: 0, ParallelMode.DATA: 0, ParallelMode.TENSOR: 0,the default  
+                             parallel seed is ParallelMode.DATA.                                                                                                               
+None
+============
+512
+-----------------
+None
+============
+512
+-----------------
+[06/26/23 22:58:01] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:561       
+                             set_seed                                                                                                                                          
+[06/26/23 22:58:01] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:561       
+                             set_seed                                                                                                                                          
+[06/26/23 22:58:01] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:561       
+                             set_seed                                                                                                                                          
+[06/26/23 22:58:01] INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/context/parallel_context.py:561       
+                             set_seed                                                                                                                                          
+                    INFO     colossalai - colossalai - INFO: initialized seed on rank 2, numpy: 0, python random: 0, ParallelMode.DATA: 0, ParallelMode.TENSOR: 0,the default  
+                             parallel seed is ParallelMode.DATA.                                                                                                               
+                    INFO     colossalai - colossalai - INFO: initialized seed on rank 0, numpy: 0, python random: 0, ParallelMode.DATA: 0, ParallelMode.TENSOR: 0,the default  
+                             parallel seed is ParallelMode.DATA.                                                                                                               
+                    INFO     colossalai - colossalai - INFO: initialized seed on rank 3, numpy: 0, python random: 0, ParallelMode.DATA: 0, ParallelMode.TENSOR: 0,the default  
+                             parallel seed is ParallelMode.DATA.                                                                                                               
+                    INFO     colossalai - colossalai - INFO: initialized seed on rank 1, numpy: 0, python random: 0, ParallelMode.DATA: 0, ParallelMode.TENSOR: 0,the default  
+                             parallel seed is ParallelMode.DATA.                                                                                                               
+                    INFO     colossalai - colossalai - INFO: /home/ubuntu/anaconda3/envs/deep310/lib/python3.10/site-packages/colossalai/initialize.py:115 launch              
+None
+============
+512
+-----------------
+                    INFO     colossalai - colossalai - INFO: Distributed environment is initialized, data parallel size: 8, pipeline parallel size: 1, tensor parallel size: 1 
+None
+============
+512
+-----------------
+None
+============
+512
+-----------------
+None
+============
+512
+-----------------
+None
+============
+512
+-----------------
+None
+============
+512
+-----------------

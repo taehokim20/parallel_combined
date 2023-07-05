@@ -1,0 +1,36 @@
+[2023-06-28 02:07:47,470] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:07:47,471] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:07:47,471] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:07:47,471] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:07:47,471] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:07:47,471] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:07:47,471] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:07:47,471] [INFO] [real_accelerator.py:110:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+[2023-06-28 02:07:53,130] [WARNING] [comm.py:152:init_deepspeed_backend] NCCL backend in DeepSpeed not yet implemented
+[2023-06-28 02:07:53,131] [INFO] [comm.py:594:init_distributed] cdb=None
+[2023-06-28 02:07:53,141] [WARNING] [comm.py:152:init_deepspeed_backend] NCCL backend in DeepSpeed not yet implemented
+[2023-06-28 02:07:53,141] [INFO] [comm.py:594:init_distributed] cdb=None
+[2023-06-28 02:07:53,190] [WARNING] [comm.py:152:init_deepspeed_backend] NCCL backend in DeepSpeed not yet implemented
+[2023-06-28 02:07:53,190] [INFO] [comm.py:594:init_distributed] cdb=None
+[2023-06-28 02:07:53,212] [WARNING] [comm.py:152:init_deepspeed_backend] NCCL backend in DeepSpeed not yet implemented
+[2023-06-28 02:07:53,212] [INFO] [comm.py:594:init_distributed] cdb=None
+[2023-06-28 02:07:53,223] [WARNING] [comm.py:152:init_deepspeed_backend] NCCL backend in DeepSpeed not yet implemented
+[2023-06-28 02:07:53,223] [INFO] [comm.py:594:init_distributed] cdb=None
+[2023-06-28 02:07:53,223] [INFO] [comm.py:625:init_distributed] Initializing TorchBackend in DeepSpeed with backend nccl
+[2023-06-28 02:07:53,232] [WARNING] [comm.py:152:init_deepspeed_backend] NCCL backend in DeepSpeed not yet implemented
+[2023-06-28 02:07:53,232] [INFO] [comm.py:594:init_distributed] cdb=None
+[2023-06-28 02:07:53,241] [WARNING] [comm.py:152:init_deepspeed_backend] NCCL backend in DeepSpeed not yet implemented
+[2023-06-28 02:07:53,241] [INFO] [comm.py:594:init_distributed] cdb=None
+[2023-06-28 02:07:53,246] [WARNING] [comm.py:152:init_deepspeed_backend] NCCL backend in DeepSpeed not yet implemented
+[2023-06-28 02:07:53,247] [INFO] [comm.py:594:init_distributed] cdb=None
+[2023-06-28 02:07:59,037] [INFO] [partition_parameters.py:453:__exit__] finished initializing model with 6.74B parameters
+ninja: no work to do.
+Time to load fused_adam op: 0.11333012580871582 seconds
+Time to load fused_adam op: 0.20639395713806152 seconds
+Time to load fused_adam op: 0.20670485496520996 seconds
+Time to load fused_adam op: 0.20674943923950195 seconds
+Time to load fused_adam op: 0.20714282989501953 secondsTime to load fused_adam op: 0.20715093612670898 secondsTime to load fused_adam op: 0.2071535587310791 seconds
+
+
+Time to load fused_adam op: 0.20755600929260254 seconds
+Parameter Offload: Total persistent parameters: 266240 in 65 params
