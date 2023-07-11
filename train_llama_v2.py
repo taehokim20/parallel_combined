@@ -22,17 +22,17 @@ import torch
 import transformers
 import utils
 from torch.utils.data import Dataset
-# from transformers import Trainer
+from transformers import Trainer
 from transformers import get_cosine_schedule_with_warmup
 
-from titans.model.vit.vit import _create_vit_model
+# from titans.model.vit.vit import _create_vit_model
 
 import colossalai
 from colossalai.nn.optimizer import HybridAdam
 from colossalai.logging import disable_existing_loggers, get_dist_logger
 from colossalai.tensor import ProcessGroup, ShardSpec
 from colossalai.utils import get_current_device, print_rank_0
-from colossalai.zero import ColoInitContext, GeminiAdamOptimizer
+from colossalai.zero import ColoInitContext, GeminiAdamOptimizer, zero_optim_wrapper
 from colossalai.booster import Booster
 from colossalai.booster.plugin import GeminiPlugin, LowLevelZeroPlugin, TorchDDPPlugin, TorchFSDPPlugin
 from colossalai.cluster import DistCoordinator
@@ -44,9 +44,8 @@ from colossalai.nn.parallel.layers import init_colo_module
 from titans.utils import barrier_context
 from colossalai.context import ParallelMode
 from colossalai.core import global_context as gpc
-from colossalai.nn import CrossEntropyLoss
-from colossalai.nn.lr_scheduler import CosineAnnealingWarmupLR
 import sys
+from statistics import mean
 
 def move_to_cuda(batch, device):
     return {k: v.to(device) for k, v in batch.items()}
@@ -55,13 +54,12 @@ def move_to_cuda(batch, device):
 def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coordinator):
     torch.cuda.synchronize()
     model.train()
+    losses = []
     with tqdm(dataloader, desc=f'Epoch [{epoch + 1}]', disable=not coordinator.is_master()) as pbar:
-        for batch in pbar: # Iters - 2 GPUs: 13000, 4 GPUs: 3250, 8 GPUs: 812
+        for batch in pbar: # Iters - 2 GPUs: 13000(=52000/(2*2)), 4 GPUs: 3250(=52000/(4*4)), 8 GPUs: 812
             # Forward
             optimizer.zero_grad()
-            batch = move_to_cuda(batch, torch.cuda.current_device())
-            # print_rank_0(batch['input_ids'].shape) ## 1st: [8, 422] (8 GPUs), [2, 137] (2 GPUs), [4, 137] (4 GPUs)
-            torch.distributed.broadcast(batch['input_ids'], src=0)
+            batch = move_to_cuda(batch, torch.cuda.current_device())           
             outputs = model(use_cache=False, **batch)
             loss = outputs['loss']
             # Backward
@@ -70,6 +68,9 @@ def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coor
             lr_scheduler.step()
             # Print batch loss
             pbar.set_postfix({'loss': loss.item()})
+            losses.append(loss.item())
+    
+    print_rank_0('Average loss of epoch {0}: {1:.2f}'.format(epoch + 1, mean(losses)))
 
 
 # def train_epoch_wo_booster(epoch, model, optimizer, lr_scheduler, dataloader, coordinator):
@@ -250,14 +251,15 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer, dat
 
 
 def train():
+    tp_degree=8
     ## for LLaMA models
     import transformers.models.llama.modeling_llama
     # Launch ColossalAI
     # colossalai.launch_from_torch(config={}, seed=0)
-    colossalai.launch_from_torch(config=dict(parallel=dict(data=1, pipeline=1, tensor=dict(size=8, mode='1d'))))
+    colossalai.launch_from_torch(config=dict(parallel=dict(data=1, pipeline=1, tensor=dict(size=tp_degree, mode='1d'))))
     coordinator = DistCoordinator()
     world_size = coordinator.world_size
-    shard_pg = ProcessGroup(tp_degree=world_size)
+    shard_pg = ProcessGroup(tp_degree=tp_degree)
     # Manage loggers
     disable_existing_loggers()
     logger = get_dist_logger()
@@ -266,7 +268,7 @@ def train():
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     
     # with PipelinableContext():
-    default_dist_spec = ShardSpec([-1], [world_size])  
+    # default_dist_spec = ShardSpec([-1], [tp_degree])  
         
     # with ColoInitContext(device=get_current_device(), default_dist_spec=default_dist_spec, default_pg=shard_pg):
     with ColoInitContext(device=get_current_device()):
@@ -280,7 +282,6 @@ def train():
 
         model.gradient_checkpointing_enable()
 
-        # with barrier_context(executor_rank=0, parallel_mode=ParallelMode.PARALLEL_1D):   ####
         tokenizer = transformers.AutoTokenizer.from_pretrained(
             model_args.model_name_or_path,
             cache_dir=training_args.cache_dir,
@@ -311,16 +312,11 @@ def train():
     compute_spec = ComputeSpec(ComputePattern.TP1D)
     init_colo_module(model, compute_spec, pg=shard_pg, recursive=True)
 
-    # print_rank_0(model)
-    for p in model.parameters():
-        print_rank_0(p)
-        print_rank_0("============")
-        print_rank_0(p.data.size())
-        print_rank_0("============")
-        # if dist.get_rank() == 7:
-        #     print(p)
-        print_rank_0(p.size())
-        sys.exit()
+    # # print_rank_0(model)
+    # for p in model.parameters():
+    #     print(p)
+    #     print(p.data.size())
+    #     break
 
     # Set plugin
     booster_kwargs = {}
@@ -357,6 +353,7 @@ def train():
     optimizer = HybridAdam(model.parameters(),
                            lr=(config['lr'] * world_size),
                            weight_decay=0.0)
+
     # Set lr scheduler
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer,
@@ -368,22 +365,16 @@ def train():
                                                                   optimizer=optimizer,
                                                                   dataloader=dataloader,
                                                                   lr_scheduler=lr_scheduler)
-
-    # for p in model.module.module.parameters():
-    #     print_rank_0(p)
-    #     if dist.get_rank() == 7:
-    #         print(p)
-    #     print_rank_0(p.size())
-    #     sys.exit()
     
+    # for p in model.unwrap().module.parameters():
+    #     print(p.data)
+    #     print_rank_0(p.data.size())
+    #     sys.exit()
+
     # Start finetuning
     logger.info(f"Start finetuning", ranks=[0])
     for epoch in range(config['epochs']):
        train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coordinator)
-
-    # for p in model.module.module.parameters():
-    #     print_rank_0(p)
-    #     break
 
     # Finish training and evaluate
     logger.info(f"Finish finetuning", ranks=[0])

@@ -4,8 +4,8 @@ export WANDB_MODE=offline
 torchrun --nproc_per_node 8 --master_port=8888 train_llama_v2.py \
     --model_name_or_path huggyllama/llama-7b \
     --data_path ./alpaca_data.json \
-    --output_dir ./trained/temp2.pt \
-    --num_train_epochs 1 \
+    --output_dir ./trained/shard \
+    --num_train_epochs 3 \
     --per_device_train_batch_size 8 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 16 \
