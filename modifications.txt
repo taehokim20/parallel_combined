@@ -1,0 +1,51 @@
+[transformers/modeling_utils.py]
+(Line 3029-3030) codes are added
+(Line 3171) Comment
+
+[colossalai > booster > plugin > dp_plugin_base.py]
+Line 8: Add from colossalai.utils import DataParallelSampler
+Line 54: Comment sampler = DistributedSampler(~)
+         Add sampler = DataParallelSampler(dataset, shuffle=shuffle)
+
+[colossalai > nn > parallel > layers > linear.py]
+Line 9: Comment self._register_shard_params([‘weight’, ‘bias’])
+        Add self._register_shard_params([‘weight’])   # LLaMA: bias=False
+Line 21-24: Commented
+            Add dist_spec={‘weight’: ShardSpec([0], [pg.tp_world_size()])}
+Line 31-34: Commented
+            Add dist_spec={‘weight’: ShardSpec([-1], [pg.tp_world_size()])}
+Line 38: target_mode=‘col’
+
+[colossalai > nn > parallel > layers > embedding.py]
+Line 36: target_mode=‘col’
+
+[colossalai > zero > gemini > placement_policy.py]
+Line 35: need_mem_stats: bool = True
+Line 52: need_mem_stats: bool = True
+
+[colossalai > zero > gemini > chunk > search_utils.py]
+Line 164-165: config_dict[dp_degree] = dict(chunk_size=group_acc_size, keep_gathered=True)
+Line 167-171: Commented
+
+[colossalai > zero > gemini > chunk > chunk.py]
+Line 156-157: # fix_gather
+              self.fix_gather = False
+Line 363-364: else:
+                  self.fix_gather = True
+Line 373: if self.is_gathered:  ->  if self.is_gathered and not self.fix_gather:
+
+[transformers > trainer.py]
+Line 2286-2287: import GPUtil
+                logs[“gpu_mem”] = GPUtil.getGPUs()[0].memoryUsed
+
+[colossalai > nn > parallel > layers > module_utils.py]
+Line 105-106: Commented to avoid additional sharding
+
+[colossalai > zero > gemini > colo_init_context.py]
+Line 33: not_default_dist_spec=False
+Line 51-59: if not not_default_dist_spec:
+                Indent existing codes
+Line 129-134: ‘Linear’ or ‘Embedding’ -> apply tensor parallelism
+              Others -> do not apply tensor parallelism
+
+
