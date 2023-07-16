@@ -46,31 +46,38 @@ from colossalai.context import ParallelMode
 from colossalai.core import global_context as gpc
 import sys
 from statistics import mean
+import GPUtil
+import psutil
 
 def move_to_cuda(batch, device):
     return {k: v.to(device) for k, v in batch.items()}
 
 
 def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coordinator):
+    print_rank_0('[3]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 32077 MB
+    print_rank_0('[3]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used))) # 18.82 GB
     torch.cuda.synchronize()
     model.train()
     losses = []
     with tqdm(dataloader, desc=f'Epoch [{epoch + 1}]', disable=not coordinator.is_master()) as pbar:
         for batch in pbar: # Iters - 2 GPUs: 13000(=52000/(2*2)), 4 GPUs: 3250(=52000/(4*4)), 8 GPUs: 812
             # Forward
-            optimizer.zero_grad()
+            # optimizer.zero_grad()
             batch = move_to_cuda(batch, torch.cuda.current_device())           
             outputs = model(use_cache=False, **batch)
+            # print_rank_0("cccccccccc")
+            # sys.exit()
             loss = outputs['loss']
             # Backward
             booster.backward(loss, optimizer)
             optimizer.step()
             lr_scheduler.step()
             # Print batch loss
-            pbar.set_postfix({'loss': loss.item()})
+            # 35381 -> 35517 -> ... MB
+            pbar.set_postfix({'loss': loss.item()}) 
             losses.append(loss.item())
     
-    print_rank_0('Average loss of epoch {0}: {1:.2f}'.format(epoch + 1, mean(losses)))
+    print_rank_0('Average loss of epoch {0}: {1:.2f}, Memory usage: {2}'.format(epoch + 1, mean(losses), GPUtil.getGPUs()[0].memoryUsed))
 
 
 # def train_epoch_wo_booster(epoch, model, optimizer, lr_scheduler, dataloader, coordinator):
@@ -250,6 +257,17 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer, dat
     return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
 
 
+def get_size(bytes, suffix="B"):
+    """
+    Scale bytes to its proper format- KB, MB, GB, TB and PB
+    """
+    factor = 1024
+    for unit in ["", "K", "M", "G", "T", "P"]:
+        if bytes < factor:
+            return f"{bytes:.2f}{unit}{suffix}"
+        bytes /= factor
+
+
 def train():
     tp_degree=8
     ## for LLaMA models
@@ -268,17 +286,20 @@ def train():
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     
     # with PipelinableContext():
-    # default_dist_spec = ShardSpec([-1], [tp_degree])  
+    default_dist_spec = ShardSpec([-1], [tp_degree])  
         
-    # with ColoInitContext(device=get_current_device(), default_dist_spec=default_dist_spec, default_pg=shard_pg):
-    with ColoInitContext(device=get_current_device()):
+    with ColoInitContext(device=get_current_device(), default_dist_spec=default_dist_spec, default_pg=shard_pg):
+    # with ColoInitContext(device=get_current_device()):
         # from transformers import LlamaConfig
         # configuration = LlamaConfig(vocab_size=31999)
+        print_rank_0('[0]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed))  # 1421 MB
+        print_rank_0('[0]Virtual total mem: {0}'.format(get_size(psutil.virtual_memory().total)))  # 1.10 TB
+        print_rank_0('[0]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))  # 14.55 GB
         model = transformers.AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             cache_dir=training_args.cache_dir,
-            # ignore_mismatched_sizes=True,
-        )
+            ignore_mismatched_sizes=True,
+        ) #.to('cuda')
 
         model.gradient_checkpointing_enable()
 
@@ -306,7 +327,25 @@ def train():
         #     tokenizer=tokenizer,
         #     model=model,
         # )
-        data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)    
+        data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args) 
+        print_rank_0('[1]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 27189 MB When sharding in with ColoInitContext 5525 MB
+        print_rank_0('[1]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used))) # 14.61 GB
+
+    from safetensors.torch import load_file   
+    state_dict = {}
+    state_dict.update(load_file("/home/ubuntu/.cache/huggingface/hub/models--huggyllama--llama-7b/snapshots/8416d3fefb0cb3ff5775a7b13c1692d10ff1aa16/model-00001-of-00002.safetensors"))
+    state_dict.update(load_file("/home/ubuntu/.cache/huggingface/hub/models--huggyllama--llama-7b/snapshots/8416d3fefb0cb3ff5775a7b13c1692d10ff1aa16/model-00002-of-00002.safetensors"))
+    for n, p in model.named_parameters():
+        x = state_dict[n]
+        if not 'norm' in n:
+            x = x.chunk(tp_degree, dim=-1)
+            x = x[dist.get_rank()]
+        p.data.copy_(x)
+
+    # for p in model.parameters():
+    #     print(p)
+    #     print(p.data.size())
+    #     sys.exit()
 
     ####################################################################
     compute_spec = ComputeSpec(ComputePattern.TP1D)
@@ -314,9 +353,10 @@ def train():
 
     # # print_rank_0(model)
     # for p in model.parameters():
-    #     print(p)
-    #     print(p.data.size())
-    #     break
+    #     setattr(p, '_ddp_to_ignore', True)
+        # print(p)
+        # print(p.data.size())
+        # break
 
     # Set plugin
     booster_kwargs = {}
@@ -326,9 +366,10 @@ def train():
                           precision='bf16',
                           pin_memory=False, #True,
                           strict_ddp_mode=False,
-                          initial_scale=2**5)
+                          initial_scale=2**5,
+                          verbose=True)         ###
     # plugin = TorchFSDPPlugin() # does not work with
-    # plugin = LowLevelZeroPlugin(stage=2)
+    # plugin = LowLevelZeroPlugin(stage=2) # All parameters should be in a same process group
 
     config = {
         'batch_size': training_args.per_device_train_batch_size,
@@ -360,12 +401,9 @@ def train():
         num_warmup_steps=num_warmup_steps,
         num_training_steps=len(dataloader) * config['epochs']
     )
+
     booster = Booster(plugin=plugin, **booster_kwargs)
-    model, optimizer, _, dataloader, lr_scheduler = booster.boost(model=model,
-                                                                  optimizer=optimizer,
-                                                                  dataloader=dataloader,
-                                                                  lr_scheduler=lr_scheduler)
-    
+    model, optimizer, _, _, _ = booster.boost(model, optimizer)
     # for p in model.unwrap().module.parameters():
     #     print(p.data)
     #     print_rank_0(p.data.size())

@@ -5,6 +5,7 @@ from torch import nn
 
 from colossalai.tensor import ColoParameter, ColoTensor, ProcessGroup
 from colossalai.utils.model.utils import InsertPostInitMethodToModuleSubClasses
+from colossalai.utils import print_rank_0
 
 # find named_params includes replica
 
@@ -28,7 +29,8 @@ def _convert_to_coloparam(param: torch.nn.Parameter,
                           device: torch.device,
                           dtype=torch.float,
                           default_pg: Optional[ProcessGroup] = None,
-                          default_dist_spec: Optional[Any] = None) -> ColoParameter:
+                          default_dist_spec: Optional[Any] = None,
+                          not_default_dist_spec=False) -> ColoParameter:
 
     if type(param) is ColoParameter:
         return param
@@ -45,14 +47,16 @@ def _convert_to_coloparam(param: torch.nn.Parameter,
     # This can reduce the model size after initialization.
     # NOTE() embedding usually can not be correctly sharded. So I use except to handle
     # the param that can not be sharded by the default plan
-    if default_pg is not None:
-        colo_param.set_process_group(default_pg)
 
-    if default_dist_spec is not None:
-        try:
-            colo_param.set_dist_spec(default_dist_spec)
-        except:
-            pass
+    if not not_default_dist_spec:
+        if default_pg is not None:
+            colo_param.set_process_group(default_pg)
+
+        if default_dist_spec is not None:
+            try:
+                colo_param.set_dist_spec(default_dist_spec)
+            except:
+                pass
     return colo_param
 
 
@@ -118,16 +122,22 @@ class ColoInitContext(InsertPostInitMethodToModuleSubClasses):
         for module_name, param_name in name_list:
             submodule = module.get_submodule(module_name)
             param = submodule.get_parameter(param_name)
+
             if param in replaced_tensors:
                 colo_param = replaced_tensors[param]
             else:
-                colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
-                                                   self._default_dist_spec)
+                if 'Linear' in str(submodule.named_parameters) or 'Embedding' in str(submodule.named_parameters):
+                    colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
+                                                    self._default_dist_spec)
+                else:
+                    colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
+                                                    self._default_dist_spec, not_default_dist_spec=True)
                 replaced_tensors[param] = colo_param
+      
             delattr(submodule, param_name)
             setattr(submodule, param_name, colo_param)
             colo_param.shared_param_modules.append(submodule)
-
+            
         param_number = 0
         meta_param_number = 0
         buffer_number = 0

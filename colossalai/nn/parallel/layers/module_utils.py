@@ -14,6 +14,7 @@ def register_colo_module(module_type: type, colo_module: ColoModule):
 
 def is_colo_module(module: torch.nn.Module):
     global _COLOSSAL_MODULES
+
     for module_type in _COLOSSAL_MODULES.keys():
         if isinstance(module, module_type):
             return True
@@ -101,8 +102,8 @@ def init_colo_module(module: torch.nn.Module,
                 continue
             param = module.get_parameter(param_name)
             if isinstance(param, ColoParameter):
-                param.set_process_group(pg)
-                param.set_dist_spec(dist_spec)
+                # param.set_process_group(pg)
+                # param.set_dist_spec(dist_spec)
                 param.compute_spec = compute_spec
                 for mod in param.shared_param_modules:
                     modules_update_param.add(mod)

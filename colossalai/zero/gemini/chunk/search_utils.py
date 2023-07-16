@@ -161,11 +161,14 @@ def search_chunk_configuration(
         group_acc_size = sum(size_list)
         total_param_size += group_acc_size
 
-        # let small parameters keep gathered in CUDA all the time
-        if group_acc_size < min_chunk_size_byte:
-            config_dict[dp_degree] = dict(chunk_size=group_acc_size, keep_gathered=True)
-        else:
-            size_dict[dp_degree] = size_list
+        # Trial 1 to avoid all_gather and reduce_scatter for 1D TP
+        config_dict[dp_degree] = dict(chunk_size=group_acc_size, keep_gathered=True)
+        
+        # # let small parameters keep gathered in CUDA all the time
+        # if group_acc_size < min_chunk_size_byte:
+        #     config_dict[dp_degree] = dict(chunk_size=group_acc_size, keep_gathered=True)
+        # else:
+        #     size_dict[dp_degree] = size_list
 
     if filter_exlarge_params:
         _filter_exlarge_params(model, size_dict)
@@ -174,6 +177,12 @@ def search_chunk_configuration(
     for key in size_dict:
         max_size = max(max_size, max(size_dict[key]))
     start_size = int(math.ceil(max_size / search_interval_byte) * search_interval_byte)
+    # #max_size:  # Shard: 33554432, No shard: 45088768
+    # #search_interval_byte: 1024
+    # #start_size  # Shard: 33554432, No shard: 45088768
+    # #search_range_byte: 33554432
+    # from colossalai.utils import print_rank_0
+    # import sys
 
     min_chunk_waste = float('+inf')
     best_chunk_size = start_size
@@ -182,6 +191,7 @@ def search_chunk_configuration(
         temp_waste = 0
         for key in size_dict:
             temp_waste += _get_unused_byte(size_dict[key], chunk_size)
+            # print_rank_0("key: {0}, temp_waste: {1}".format(key, temp_waste))
         if temp_waste < min_chunk_waste:
             min_chunk_waste = temp_waste
             best_chunk_size = chunk_size

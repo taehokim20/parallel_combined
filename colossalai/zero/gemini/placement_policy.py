@@ -32,6 +32,7 @@ class PlacementPolicy(ABC):
 
 class CPUPlacementPolicy(PlacementPolicy):
 
+    need_mem_stats: bool = True
     def __init__(self,
                  chunk_manager: ChunkManager,
                  mem_stats_collector: Optional[ChunkMemStatsCollector] = None) -> None:
@@ -49,6 +50,7 @@ class CPUPlacementPolicy(PlacementPolicy):
 
 class CUDAPlacementPolicy(PlacementPolicy):
 
+    need_mem_stats: bool = True
     def __init__(self,
                  chunk_manager: ChunkManager,
                  mem_stats_collector: Optional[ChunkMemStatsCollector] = None) -> None:
