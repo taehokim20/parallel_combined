@@ -73,8 +73,7 @@ def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coor
             optimizer.step()
             lr_scheduler.step()
             # Print batch loss
-            # 35381 -> 35517 -> ... MB
-            pbar.set_postfix({'loss': loss.item()}) 
+            pbar.set_postfix({'loss': loss.item(), 'Memory usage': GPUtil.getGPUs()[0].memoryUsed}) 
             losses.append(loss.item())
     
     print_rank_0('Average loss of epoch {0}: {1:.2f}, Memory usage: {2}'.format(epoch + 1, mean(losses), GPUtil.getGPUs()[0].memoryUsed))
@@ -269,7 +268,7 @@ def get_size(bytes, suffix="B"):
 
 
 def train():
-    tp_degree=8
+    tp_degree=4
     ## for LLaMA models
     import transformers.models.llama.modeling_llama
     # Launch ColossalAI
@@ -328,7 +327,7 @@ def train():
         #     model=model,
         # )
         data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args) 
-        print_rank_0('[1]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 27189 MB When sharding in with ColoInitContext 5525 MB
+        print_rank_0('[1]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 27189 MB // When sharding in with ColoInitContext 5525 MB
         print_rank_0('[1]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used))) # 14.61 GB
 
     from safetensors.torch import load_file   
@@ -339,7 +338,7 @@ def train():
         x = state_dict[n]
         if not 'norm' in n:
             x = x.chunk(tp_degree, dim=-1)
-            x = x[dist.get_rank()]
+            x = x[dist.get_rank() % tp_degree]
         p.data.copy_(x)
 
     # for p in model.parameters():
@@ -366,8 +365,7 @@ def train():
                           precision='bf16',
                           pin_memory=False, #True,
                           strict_ddp_mode=False,
-                          initial_scale=2**5,
-                          verbose=True)         ###
+                          initial_scale=2**5)         ###
     # plugin = TorchFSDPPlugin() # does not work with
     # plugin = LowLevelZeroPlugin(stage=2) # All parameters should be in a same process group
 
@@ -416,9 +414,9 @@ def train():
 
     # Finish training and evaluate
     logger.info(f"Finish finetuning", ranks=[0])
-    output_dir = './trained/shard_colo_llama-7b/shard_' + str(dist.get_rank()) + '.pt'
-    booster.save_model(model, output_dir)
-    logger.info(f"Saving model checkpoint to {output_dir}")
+    # output_dir = './trained/shard_colo_llama-7b/shard_' + str(dist.get_rank()) + '.pt'
+    # booster.save_model(model, output_dir)
+    # logger.info(f"Saving model checkpoint to {output_dir}")
 
     ############################ Case 2. Use colossalai.initialize ############################
     # optimizer = torch.optim.AdamW(model.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
