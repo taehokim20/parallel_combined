@@ -33,4 +33,4 @@ class ColoEmbedding(ColoModule):
             mode='col',
         )
 
-        self._set_default(compute_pattern=_compute_pattern, target_mode='col') # target_mode='row'
+        self._set_default(compute_pattern=_compute_pattern, target_mode='row') # target_mode='col'

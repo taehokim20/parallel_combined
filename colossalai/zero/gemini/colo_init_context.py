@@ -74,7 +74,8 @@ class ColoInitContext(InsertPostInitMethodToModuleSubClasses):
                  device: torch.device = torch.device('cpu'),
                  dtype: torch.dtype = torch.float,
                  default_pg: Optional[ProcessGroup] = None,
-                 default_dist_spec=None):
+                 default_dist_spec=None,
+                 model_name='llama-7b'):
         """
         Args:
             device (torch.device): the device where parameters initialized are resident. Defaults to torch.device('cpu').
@@ -86,13 +87,13 @@ class ColoInitContext(InsertPostInitMethodToModuleSubClasses):
         self._device = device
         self._dtype = dtype
 
-        self._register_colo_modules()
+        self._register_colo_modules(model_name=model_name)
         self._default_pg = default_pg
         self._default_dist_spec = default_dist_spec
 
-    def _register_colo_modules(self):
+    def _register_colo_modules(self, model_name):
         from colossalai.nn.parallel.layers import ColoEmbedding, ColoLinear, register_colo_module
-        register_colo_module(torch.nn.Linear, ColoLinear())
+        register_colo_module(torch.nn.Linear, ColoLinear(model_name=model_name))
         register_colo_module(torch.nn.Embedding, ColoEmbedding())
 
     def _pre_context_exec(self):
@@ -126,7 +127,10 @@ class ColoInitContext(InsertPostInitMethodToModuleSubClasses):
             if param in replaced_tensors:
                 colo_param = replaced_tensors[param]
             else:
-                if 'Linear' in str(submodule.named_parameters) or 'Embedding' in str(submodule.named_parameters):
+                if param_name == 'bias':
+                    colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
+                                                    self._default_dist_spec, not_default_dist_spec=True)
+                elif 'Linear' in str(submodule.named_parameters) or 'Embedding' in str(submodule.named_parameters):
                     colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
                                                     self._default_dist_spec)
                 else:

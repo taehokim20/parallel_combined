@@ -100,15 +100,24 @@ def init_colo_module(module: torch.nn.Module,
         for param_name, dist_spec in colo_module.get_dist_specs_with_mode(compute_pattern, mode=mode).items():
             if dist_spec is None:
                 continue
-            param = module.get_parameter(param_name)
+            ####### param = module.get_parameter(param_name) #######
+            module_path, _, param_name = param_name.rpartition(".")
+            mod = module.get_submodule(module_path)
+            param = getattr(mod, param_name)
+            ########################################################
+            ######### Avoid the case of bias=False #########
+            if not isinstance(param, torch.nn.Parameter):
+                continue
+            ################################################
+
             if isinstance(param, ColoParameter):
                 # param.set_process_group(pg)
                 # param.set_dist_spec(dist_spec)
                 param.compute_spec = compute_spec
                 for mod in param.shared_param_modules:
                     modules_update_param.add(mod)
-        for mod in modules_update_param:
-            check_colo_module(mod, pg, recursive=False)
+        # for mod in modules_update_param:
+        #     check_colo_module(mod, pg, recursive=False)
     if recursive == True:
         for submodule in module.children():
             init_colo_module(submodule, compute_spec, pg=pg, recursive=True, mode=mode)
