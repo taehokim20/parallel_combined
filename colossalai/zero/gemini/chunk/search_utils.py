@@ -161,14 +161,15 @@ def search_chunk_configuration(
         group_acc_size = sum(size_list)
         total_param_size += group_acc_size
 
-        # Trial 1 to avoid all_gather and reduce_scatter for 1D TP
-        config_dict[dp_degree] = dict(chunk_size=group_acc_size, keep_gathered=True)
-        
-        # # let small parameters keep gathered in CUDA all the time
-        # if group_acc_size < min_chunk_size_byte:
-        #     config_dict[dp_degree] = dict(chunk_size=group_acc_size, keep_gathered=True)
-        # else:
-        #     size_dict[dp_degree] = size_list
+        if dp_degree == 1:
+            # Avoid all_gather and reduce_scatter for 1D TP
+            config_dict[dp_degree] = dict(chunk_size=group_acc_size, keep_gathered=True)
+        elif dp_degree == 8:
+            # let small parameters keep gathered in CUDA all the time
+            if group_acc_size < min_chunk_size_byte:
+                config_dict[dp_degree] = dict(chunk_size=group_acc_size, keep_gathered=True)
+            else:
+                size_dict[dp_degree] = size_list
 
     if filter_exlarge_params:
         _filter_exlarge_params(model, size_dict)
