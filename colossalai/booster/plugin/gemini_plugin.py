@@ -46,9 +46,8 @@ class GeminiCheckpointIO(GeneralCheckpointIO):
         """
         # the model should be unwrapped in self.load_model via ModelWrapper.unwrap
         # as there is communication when get state dict, this must be called on all processes
-        state_dict = model.state_dict(only_rank_0=True)
-        if self.coordinator.is_master():
-            save_state_dict(state_dict, checkpoint, use_safetensors)
+        state_dict = model.state_dict(only_rank_0=False)
+        save_state_dict(state_dict, checkpoint, use_safetensors)
 
     def save_unsharded_optimizer(self, optimizer: Optimizer, checkpoint: str, gather_dtensor: bool):
         """

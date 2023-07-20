@@ -38,4 +38,7 @@ Line 129-134: bias -> do not apply tensor parallelism
               ‘Linear’ or ‘Embedding’ -> apply tensor parallelism
               Others -> do not apply tensor parallelism
 
+[colossalai > booster > plugin > gemini_plugin.py]
+Line 49-50: state_dict = model.state_dict(only_rank_0=False)
+            save_state_dict(state_dict, checkpoint, use_safetensors)
 
