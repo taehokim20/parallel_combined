@@ -43,6 +43,14 @@ from statistics import mean
 import GPUtil
 import psutil
 
+from transformers import AutoConfig
+# LLaMA
+import transformers.models.llama.modeling_llama
+from transformers.models.llama.modeling_llama import LlamaForCausalLM
+# OPT
+import transformers.models.opt.modeling_opt
+from transformers.models.opt.modeling_opt import OPTForCausalLM
+
 
 def move_to_cuda(batch, device):
     return {k: v.to(device) for k, v in batch.items()}
@@ -66,8 +74,8 @@ def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coor
             optimizer.step()
             lr_scheduler.step()
             # Print batch loss
-            # pbar.set_postfix({'loss': loss.item(), 'Memory usage': GPUtil.getGPUs()[0].memoryUsed})
-            pbar.set_postfix({'loss': loss.item()}) 
+            pbar.set_postfix({'loss': loss.item(), 'Memory usage': GPUtil.getGPUs()[0].memoryUsed})
+            # pbar.set_postfix({'loss': loss.item()}) 
             losses.append(loss.item())
     
     print_rank_0('Average loss of epoch {0}: {1:.2f}, Memory usage: {2}'.format(epoch + 1, mean(losses), 
@@ -222,10 +230,6 @@ def train():
     tp_degree=8
     dp_degree=1
     dims=-1 # 0: by row (bs=8, peak_mem=28487 MB), -1: by col (bs=8, peak_mem=24855 MB)
-    # LLaMA
-    import transformers.models.llama.modeling_llama
-    # OPT
-    import transformers.models.opt.modeling_opt
     # Launch ColossalAI
     # colossalai.launch_from_torch(config={}, seed=0)
     colossalai.launch_from_torch(config=dict(parallel=dict(data=dp_degree, pipeline=1, 
@@ -250,11 +254,11 @@ def train():
         print_rank_0('[0]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed))  # 1421 MB
         print_rank_0('[0]Virtual total mem: {0}'.format(get_size(psutil.virtual_memory().total)))  # 1.10 TB
         print_rank_0('[0]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))  # 14.55 GB
-        model = transformers.AutoModelForCausalLM.from_pretrained(
-            model_args.model_name_or_path,
-            cache_dir=training_args.cache_dir,
-            ignore_mismatched_sizes=True,
-        ).to('cuda')
+        model_config = AutoConfig.from_pretrained(model_args.model_name_or_path)
+        if 'llama-7b' in model_args.model_name_or_path:
+            model = LlamaForCausalLM(model_config)
+        elif 'opt-6.7b' in model_args.model_name_or_path:
+            model = OPTForCausalLM(model_config)
 
         model.gradient_checkpointing_enable()
 
@@ -300,10 +304,10 @@ def train():
     print_rank_0('[1]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 27189 MB // When sharding in with ColoInitContext  MB
     print_rank_0('[1]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used))) # 14.61 GB
 
-    # for p in model.parameters():
-    #     print(p)
-    #     print(p.data.size())
-    #     sys.exit()
+    for p in model.parameters():
+        print(p)
+        print(p.data.size())
+        sys.exit()
 
     compute_spec = ComputeSpec(ComputePattern.TP1D)
     init_colo_module(model, compute_spec, pg=shard_pg, recursive=True)
@@ -353,7 +357,7 @@ def train():
 
     # Finish training and evaluate
     logger.info(f"Finish finetuning", ranks=[0])
-    output_dir = './trained/shard_colo_llama-7b/shard_' + str(dist.get_rank()) + '.pt'
+    output_dir = './trained/shard_colo_opt-6.7b/shard_' + str(dist.get_rank()) + '.pt'
     booster.save_model(model, output_dir)
     logger.info(f"Saving model checkpoint to {output_dir}")
 
