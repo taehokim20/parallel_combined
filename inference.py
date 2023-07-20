@@ -62,14 +62,14 @@ def inference():
   )
 
   if tokenizer.pad_token is None:
-    # For size matching of Colossal-AI
-    tokenizer.pad_token = tokenizer.eos_token
-    # # Other cases
-    # smart_tokenizer_and_embedding_resize(
-    #   special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
-    #   tokenizer=tokenizer,
-    #   model=model,
-    # )
+    # # For size matching of Colossal-AI
+    # tokenizer.pad_token = tokenizer.eos_token
+    # Other cases
+    smart_tokenizer_and_embedding_resize(
+      special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
+      tokenizer=tokenizer,
+      model=model,
+    )
   tokenizer.add_special_tokens(
     {
       "eos_token": DEFAULT_EOS_TOKEN,

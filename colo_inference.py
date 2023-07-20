@@ -7,12 +7,20 @@ from transformers import GenerationConfig
 import colossalai
 from colossalai.zero import ColoInitContext
 from colossalai.utils import get_current_device
-from colossalai.tensor import ProcessGroup, ComputePattern, ComputeSpec
+from colossalai.tensor import ProcessGroup, ShardSpec, ComputePattern, ComputeSpec
 from colossalai.nn.parallel.layers import init_colo_module
 from colossalai.cluster import DistCoordinator
 import torch.distributed as dist
 from colossalai.logging import disable_existing_loggers, get_dist_logger
 import sys
+
+from transformers import AutoConfig
+# LLaMA
+import transformers.models.llama.modeling_llama
+from transformers.models.llama.modeling_llama import LlamaForCausalLM
+# OPT
+import transformers.models.opt.modeling_opt
+from transformers.models.opt.modeling_opt import OPTForCausalLM
 
 from train import ModelArguments, smart_tokenizer_and_embedding_resize, DEFAULT_PAD_TOKEN, DEFAULT_EOS_TOKEN, \
   DEFAULT_BOS_TOKEN, DEFAULT_UNK_TOKEN, PROMPT_DICT
@@ -46,20 +54,32 @@ def generate_prompt(instruction, input=None):
 
 
 def inference():
+  tp_degree=8
+  dp_degree=1
+  dims=-1 # 0: by row (bs=8, peak_mem=28487 MB), -1: by col (bs=8, peak_mem=24855 MB)
   disable_existing_loggers()
   import transformers.models.llama.modeling_llama
-  colossalai.launch_from_torch(config=dict(parallel=dict(data=1, pipeline=1, tensor=dict(size=8, mode='1d'))))
+  colossalai.launch_from_torch(config=dict(parallel=dict(data=dp_degree, pipeline=1, 
+                                                           tensor=dict(size=tp_degree, mode='1d'))))
   parser = transformers.HfArgumentParser((ModelArguments, InferenceArguments))
   model_args, inference_args = parser.parse_args_into_dataclasses()
   logger = get_dist_logger()
-
-  with ColoInitContext(device=get_current_device()):
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-      model_args.model_name_or_path,
-      # load_in_8bit=inference_args.load_in_8bit,
-      # torch_dtype=inference_args.inference_dtype,
-      # device_map="auto",
-    )
+  shard_pg = ProcessGroup(tp_degree=tp_degree)
+  default_dist_spec = ShardSpec([dims], [tp_degree])
+        
+  with ColoInitContext(device=get_current_device(), default_dist_spec=default_dist_spec, default_pg=shard_pg,
+                       model_name=model_args.model_name_or_path):
+    model_config = AutoConfig.from_pretrained(model_args.model_name_or_path)
+    if 'llama-7b' in model_args.model_name_or_path:
+      model = LlamaForCausalLM(model_config)
+    elif 'opt-6.7b' in model_args.model_name_or_path:
+      model = OPTForCausalLM(model_config)
+    # model = transformers.AutoModelForCausalLM.from_pretrained(
+    #   model_args.model_name_or_path,
+    #   # load_in_8bit=inference_args.load_in_8bit,
+    #   # torch_dtype=inference_args.inference_dtype,
+    #   # device_map="auto",
+    # )
     model.cuda()
     model.eval()
 
@@ -92,15 +112,12 @@ def inference():
       }
     )
 
-  coordinator = DistCoordinator()
-  world_size = coordinator.world_size
-  shard_pg = ProcessGroup(tp_degree=world_size)
   compute_spec = ComputeSpec(ComputePattern.TP1D)
   init_colo_module(model, compute_spec, pg=shard_pg, recursive=True)
   if inference_args.override_checkpoint is not None:
     logger.info("Loading override checkpoint.", ranks=[0])
     try:
-      state_dict = torch.load('./trained/shard_colo_llama-7b/shard_' + str(dist.get_rank()) + '.pt')
+      state_dict = torch.load(inference_args.override_checkpoint + '/shard_' + str(dist.get_rank()) + '.pt')
       model.load_state_dict(state_dict)
     except:
       raise Exception("Failed to load checkpoint")
