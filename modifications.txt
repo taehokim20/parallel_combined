@@ -1,7 +1,3 @@
-[transformers/modeling_utils.py]
-(Line 3029-3030) codes are added
-(Line 3171) Comment
-
 [colossalai > booster > plugin > dp_plugin_base.py]
 Line 8: Add from colossalai.utils import DataParallelSampler
 Line 54: Comment sampler = DistributedSampler(~)
