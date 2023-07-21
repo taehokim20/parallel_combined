@@ -105,7 +105,8 @@ class CheckpointIO(ABC):
                    gather_dtensor: bool = True,
                    variant: str = None,
                    size_per_shard: int = 1024,
-                   use_safetensors: bool = False):
+                   use_safetensors: bool = False,
+                   tp_degree: int = 1):
         """
         Save model to checkpoint.
 
@@ -139,7 +140,7 @@ class CheckpointIO(ABC):
         if shard:
             self.save_sharded_model(model, checkpoint, gather_dtensor, variant, size_per_shard, use_safetensors)
         else:
-            self.save_unsharded_model(model, checkpoint, gather_dtensor, use_safetensors)
+            self.save_unsharded_model(model, checkpoint, gather_dtensor, use_safetensors, tp_degree=tp_degree)
 
     def load_optimizer(self, optimizer: Optimizer, checkpoint: str):
         """
@@ -234,7 +235,7 @@ class CheckpointIO(ABC):
         pass
 
     @abstractmethod
-    def save_unsharded_model(self, model: nn.Module, checkpoint: str, gather_dtensor: bool, use_safetensors: bool):
+    def save_unsharded_model(self, model: nn.Module, checkpoint: str, gather_dtensor: bool, use_safetensors: bool, tp_degree: int):
         """
         Save model to unsharded checkpoint.
 

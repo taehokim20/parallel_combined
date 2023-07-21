@@ -66,13 +66,13 @@ class Booster:
         # set accelerator
         if self.plugin and self.plugin.control_device():
             self.accelerator = None
-            warnings.warn('The plugin will control the accelerator, so the device argument will be ignored.')
+            # warnings.warn('The plugin will control the accelerator, so the device argument will be ignored.')
         else:
             self.accelerator = Accelerator(device)
 
         # set precision
         if self.plugin and self.plugin.control_precision():
-            warnings.warn('The plugin will control the precision, so the mixed_precision argument will be ignored.')
+            # warnings.warn('The plugin will control the precision, so the mixed_precision argument will be ignored.')
             self.mixed_precision = None
         elif mixed_precision is None:
             self.mixed_precision = None
@@ -183,7 +183,8 @@ class Booster:
                    checkpoint: str,
                    prefix: str = None,
                    shard: bool = False,
-                   size_per_shard: int = 1024):
+                   size_per_shard: int = 1024,
+                   tp_degree: int = 1):
         """Save model to checkpoint.
 
         Args:
@@ -196,7 +197,7 @@ class Booster:
                 If true, the checkpoint will be a folder. Otherwise, it will be a single file. Defaults to False.
             size_per_shard (int, optional): Maximum size of checkpoint shard file in MB. This is useful only when ``shard=True``. Defaults to 1024.
         """
-        self.checkpoint_io.save_model(model, checkpoint=checkpoint, shard=shard, size_per_shard=size_per_shard)
+        self.checkpoint_io.save_model(model, checkpoint=checkpoint, shard=shard, size_per_shard=size_per_shard, tp_degree=tp_degree)
 
     def load_optimizer(self, optimizer: Optimizer, checkpoint: str):
         """Load optimizer from checkpoint.
