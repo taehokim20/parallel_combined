@@ -11,15 +11,8 @@ Line 35: need_mem_stats: bool = True
 Line 52: need_mem_stats: bool = True
 
 [colossalai > zero > gemini > chunk > search_utils.py]
-Line 164-172: Divide cases - 1) dp_degree == 1 for TP
+Line 199-202: Divide cases - 1) dp_degree == 1 for TP
                              2) dp_degree == 8 for DP
-
-[colossalai > zero > gemini > chunk > chunk.py]
-Line 156-157: # fix_gather
-              self.fix_gather = False
-Line 363-364: else:
-                  self.fix_gather = True
-Line 373: if self.is_gathered:  ->  if self.is_gathered and not self.fix_gather:
 
 [transformers > trainer.py]
 Line 2286-2287: import GPUtil
@@ -41,4 +34,13 @@ Line 129-134: bias -> do not apply tensor parallelism
 [colossalai > booster > plugin > gemini_plugin.py]
 Line 49-50: state_dict = model.state_dict(only_rank_0=False)
             save_state_dict(state_dict, checkpoint, use_safetensors)
+
+[colossalai > booster > booster.py]
+Line 187: tp_degree: int = 1
+Line 200: , tp_degree=tp_degree
+
+[colossalai > checkpoint_io > checkpoint_io_base.py]
+Line 109: tp_degree: int = 1
+Line 143: , tp_degree=tp_degree
+Line 238: , tp_degree: int
 
