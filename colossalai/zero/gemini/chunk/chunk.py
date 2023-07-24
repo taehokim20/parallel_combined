@@ -153,9 +153,6 @@ class Chunk:
         self.l2_norm_flag = False
         self.l2_norm = None
 
-        # fix_gather
-        self.fix_gather = False
-
     @property
     def memory_usage(self) -> Dict[str, int]:
         cuda_memory = 0
@@ -360,8 +357,6 @@ class Chunk:
 
         if not self.is_gathered:
             self.__gather()
-        else:
-            self.fix_gather = True
 
         self.__update_tensors_ptr()
 
@@ -371,7 +366,7 @@ class Chunk:
         # sanity check
         assert self.chunk_temp is None
 
-        if self.is_gathered and not self.fix_gather:
+        if self.is_gathered:
             self.__scatter()
 
     def reduce(self):

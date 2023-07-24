@@ -161,15 +161,11 @@ def search_chunk_configuration(
         group_acc_size = sum(size_list)
         total_param_size += group_acc_size
 
-        if dp_degree == 1:
-            # Avoid all_gather and reduce_scatter for 1D TP
+        # let small parameters keep gathered in CUDA all the time
+        if group_acc_size < min_chunk_size_byte:
             config_dict[dp_degree] = dict(chunk_size=group_acc_size, keep_gathered=True)
-        elif dp_degree == 8:
-            # let small parameters keep gathered in CUDA all the time
-            if group_acc_size < min_chunk_size_byte:
-                config_dict[dp_degree] = dict(chunk_size=group_acc_size, keep_gathered=True)
-            else:
-                size_dict[dp_degree] = size_list
+        else:
+            size_dict[dp_degree] = size_list
 
     if filter_exlarge_params:
         _filter_exlarge_params(model, size_dict)
@@ -182,8 +178,6 @@ def search_chunk_configuration(
     # #search_interval_byte: 1024
     # #start_size  # Shard: 33554432, No shard: 45088768
     # #search_range_byte: 33554432
-    # from colossalai.utils import print_rank_0
-    # import sys
 
     min_chunk_waste = float('+inf')
     best_chunk_size = start_size
@@ -202,6 +196,11 @@ def search_chunk_configuration(
     for dp_degree in params_dict:
         if dp_degree in config_dict:
             continue
-        config_dict[dp_degree] = dict(chunk_size=best_chunk_size, keep_gathered=False)
+        if dp_degree > 1:
+            # Original
+            config_dict[dp_degree] = dict(chunk_size=best_chunk_size, keep_gathered=False)
+        else:
+            # Avoid all_gather and reduce_scatter for 1D TP
+            config_dict[dp_degree] = dict(chunk_size=best_chunk_size, keep_gathered=True)
 
     return config_dict, total_param_size, min_chunk_waste
