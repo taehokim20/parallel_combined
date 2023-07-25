@@ -65,9 +65,11 @@ def inference():
   model_args, inference_args = parser.parse_args_into_dataclasses()
   logger = get_dist_logger()
   shard_pg = ProcessGroup(tp_degree=tp_degree)
-  default_dist_spec = ShardSpec([dims], [tp_degree])
+  embedding_dist_spec = ShardSpec([-1], [tp_degree])
+  linear_dist_spec = ShardSpec([0], [tp_degree])
         
-  with ColoInitContext(device=get_current_device(), default_dist_spec=default_dist_spec, default_pg=shard_pg,
+  with ColoInitContext(device=get_current_device(), embedding_dist_spec=embedding_dist_spec, 
+                       linear_dist_spec=linear_dist_spec, default_pg=shard_pg,
                        model_name=model_args.model_name_or_path):
     model_config = AutoConfig.from_pretrained(model_args.model_name_or_path)
     if 'llama-7b' in model_args.model_name_or_path:
@@ -117,7 +119,7 @@ def inference():
   if inference_args.override_checkpoint is not None:
     logger.info("Loading override checkpoint.", ranks=[0])
     try:
-      state_dict = torch.load(inference_args.override_checkpoint + '/shard_' + str(dist.get_rank()) + '.pt')
+      state_dict = torch.load(inference_args.override_checkpoint + 'shard_' + str(dist.get_rank()) + '.pt')
       model.load_state_dict(state_dict)
     except:
       raise Exception("Failed to load checkpoint")

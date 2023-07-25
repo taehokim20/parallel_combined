@@ -29,8 +29,7 @@ def _convert_to_coloparam(param: torch.nn.Parameter,
                           device: torch.device,
                           dtype=torch.float,
                           default_pg: Optional[ProcessGroup] = None,
-                          default_dist_spec: Optional[Any] = None,
-                          not_default_dist_spec=False) -> ColoParameter:
+                          default_dist_spec: Optional[Any] = None) -> ColoParameter:
 
     if type(param) is ColoParameter:
         return param
@@ -48,15 +47,14 @@ def _convert_to_coloparam(param: torch.nn.Parameter,
     # NOTE() embedding usually can not be correctly sharded. So I use except to handle
     # the param that can not be sharded by the default plan
 
-    if not not_default_dist_spec:
-        if default_pg is not None:
-            colo_param.set_process_group(default_pg)
+    if default_pg is not None:
+        colo_param.set_process_group(default_pg)
 
-        if default_dist_spec is not None:
-            try:
-                colo_param.set_dist_spec(default_dist_spec)
-            except:
-                pass
+    if default_dist_spec is not None:
+        try:
+            colo_param.set_dist_spec(default_dist_spec)
+        except:
+            pass
     return colo_param
 
 
@@ -74,14 +72,17 @@ class ColoInitContext(InsertPostInitMethodToModuleSubClasses):
                  device: torch.device = torch.device('cpu'),
                  dtype: torch.dtype = torch.float,
                  default_pg: Optional[ProcessGroup] = None,
-                 default_dist_spec=None,
+                 embedding_dist_spec=None,
+                 linear_dist_spec=None,
                  model_name='llama-7b'):
         """
         Args:
             device (torch.device): the device where parameters initialized are resident. Defaults to torch.device('cpu').
             dtype (torch.dtype): the dtype of parameters initialized. Defaults to torch.float.
             default_pg (ProcessGroup): the default process group for all initialized parameters.
-            default_dist_spec: the default distributed specifications.
+            embedding_dist_spec: the default distributed specifications of Embedding tensor.
+            linear_dist_spec: the default distributed specifications of Linear tensor.
+            model_name: The partial model name for training/fine-tuning/inference.
         """
         super().__init__()
         self._device = device
@@ -89,7 +90,8 @@ class ColoInitContext(InsertPostInitMethodToModuleSubClasses):
 
         self._register_colo_modules(model_name=model_name)
         self._default_pg = default_pg
-        self._default_dist_spec = default_dist_spec
+        self._embedding_dist_spec = embedding_dist_spec
+        self._linear_dist_spec = linear_dist_spec
 
     def _register_colo_modules(self, model_name):
         from colossalai.nn.parallel.layers import ColoEmbedding, ColoLinear, register_colo_module
@@ -128,14 +130,15 @@ class ColoInitContext(InsertPostInitMethodToModuleSubClasses):
                 colo_param = replaced_tensors[param]
             else:
                 if param_name == 'bias':
+                    colo_param = _convert_to_coloparam(param, self._device, self._dtype)
+                elif 'Embedding' in str(submodule.named_parameters):
                     colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
-                                                    self._default_dist_spec, not_default_dist_spec=True)
-                elif 'Linear' in str(submodule.named_parameters) or 'Embedding' in str(submodule.named_parameters):
+                                                    self._embedding_dist_spec)
+                elif 'Linear' in str(submodule.named_parameters):
                     colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
-                                                    self._default_dist_spec)
+                                                    self._linear_dist_spec)
                 else:
-                    colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
-                                                    self._default_dist_spec, not_default_dist_spec=True)
+                    colo_param = _convert_to_coloparam(param, self._device, self._dtype)
                 replaced_tensors[param] = colo_param
       
             delattr(submodule, param_name)

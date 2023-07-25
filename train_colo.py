@@ -66,7 +66,7 @@ def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coor
         for batch in pbar: # Iters - 2 GPUs: 13000(=52000/(2*2)), 4 GPUs: 3250(=52000/(4*4)), 8 GPUs: 812
             # Forward
             optimizer.zero_grad()
-            batch = move_to_cuda(batch, torch.cuda.current_device())           
+            batch = move_to_cuda(batch, torch.cuda.current_device())         
             outputs = model(use_cache=False, **batch)
             loss = outputs['loss']
             # Backward
@@ -74,8 +74,8 @@ def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coor
             optimizer.step()
             lr_scheduler.step()
             # Print batch loss
-            pbar.set_postfix({'loss': loss.item(), 'Memory usage': GPUtil.getGPUs()[0].memoryUsed})
-            # pbar.set_postfix({'loss': loss.item()}) 
+            # pbar.set_postfix({'loss': loss.item(), 'Memory usage': GPUtil.getGPUs()[0].memoryUsed})
+            pbar.set_postfix({'loss': loss.item()}) 
             losses.append(loss.item())
     
     print_rank_0('Average loss of epoch {0}: {1:.2f}, Memory usage: {2}'.format(epoch + 1, mean(losses), 
@@ -229,7 +229,7 @@ def get_size(bytes, suffix="B"):
 def train():
     tp_degree=8
     dp_degree=1
-    dims=-1 # 0: by row (bs=8, peak_mem=28487 MB), -1: by col (bs=8, peak_mem=24855 MB)
+    # dims=0 # 0: by row (bs=8, peak_mem=28487 MB), -1: by col (bs=8, peak_mem=24855 MB)
     # Launch ColossalAI
     # colossalai.launch_from_torch(config={}, seed=0)
     colossalai.launch_from_torch(config=dict(parallel=dict(data=dp_degree, pipeline=1, 
@@ -246,9 +246,11 @@ def train():
     # with PipelinableContext():
 
     shard_pg = ProcessGroup(tp_degree=tp_degree)
-    default_dist_spec = ShardSpec([dims], [tp_degree])
+    embedding_dist_spec = ShardSpec([-1], [tp_degree])
+    linear_dist_spec = ShardSpec([0], [tp_degree])
         
-    with ColoInitContext(device=get_current_device(), default_dist_spec=default_dist_spec, default_pg=shard_pg,
+    with ColoInitContext(device=get_current_device(), embedding_dist_spec=embedding_dist_spec, 
+                         linear_dist_spec=linear_dist_spec, default_pg=shard_pg,
                          model_name=model_args.model_name_or_path):
     # with ColoInitContext(device=get_current_device()):
         print_rank_0('[0]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed))  # 1421 MB
@@ -297,17 +299,16 @@ def train():
             n = n.replace('model.', '')
         x = state_dict[n]
         if not 'norm' in n and not 'bias' in n:
-            x = x.chunk(tp_degree, dim=dims)
-            x = x[dist.get_rank() % tp_degree]
+            if 'embed' in n:
+                x = x.chunk(tp_degree, dim=-1)
+                x = x[dist.get_rank() % tp_degree]
+            else:
+                x = x.chunk(tp_degree, dim=0)
+                x = x[dist.get_rank() % tp_degree]
         p.data.copy_(x)
     
     print_rank_0('[1]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 27189 MB // When sharding in with ColoInitContext 5545 MB
     print_rank_0('[1]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used))) # 14.61 GB
-
-    # for p in model.parameters():
-    #     print(p)
-    #     print(p.data.size())
-    #     sys.exit()
 
     compute_spec = ComputeSpec(ComputePattern.TP1D)
     init_colo_module(model, compute_spec, pg=shard_pg, recursive=True)
@@ -357,7 +358,7 @@ def train():
 
     # Finish training and evaluate
     logger.info(f"Finish finetuning", ranks=[0])
-    output_dir = './trained/shard_colo_opt-6.7b/shard_' + str(dist.get_rank()) + '.pt'
+    output_dir = './trained/shard_colo_llama-7b/shard_' + str(dist.get_rank()) + '.pt'
     booster.save_model(model, output_dir, tp_degree=tp_degree)
     logger.info(f"Saving model checkpoint to {output_dir}")
 
