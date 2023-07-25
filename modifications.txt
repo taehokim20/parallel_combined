@@ -11,8 +11,12 @@ Line 35: need_mem_stats: bool = True
 Line 52: need_mem_stats: bool = True
 
 [colossalai > zero > gemini > chunk > search_utils.py]
-Line 199-202: Divide cases - 1) dp_degree == 1 for TP
-                             2) dp_degree == 8 for DP
+Line 199-204: if dp_degree > 1:
+                  # Original
+                  config_dict[dp_degree] = dict(chunk_size=best_chunk_size, keep_gathered=False)
+              else:
+                  # Avoid all_gather and reduce_scatter for 1D TP
+                  config_dict[dp_degree] = dict(chunk_size=best_chunk_size, keep_gathered=True)
 
 [transformers > trainer.py]
 Line 2286-2287: import GPUtil
@@ -24,16 +28,30 @@ Line 114-115: Commented to avoid additional sharding
 Line 119-120: Commented
 
 [colossalai > zero > gemini > colo_init_context.py]
-Line 33: not_default_dist_spec=False
-Line 51-59: if not not_default_dist_spec:
-                Indent existing codes
-Line 129-134: bias -> do not apply tensor parallelism
-              ‘Linear’ or ‘Embedding’ -> apply tensor parallelism
-              Others -> do not apply tensor parallelism
+Line 75-76: embedding_dist_spec=None,
+            linear_dist_spec=None,
+Line 93-94: self._embedding_dist_spec = embedding_dist_spec
+            self._linear_dist_spec = linear_dist_spec
+Line 132-141: if param_name == 'bias':
+                  colo_param = _convert_to_coloparam(param, self._device, self._dtype)
+              elif 'Embedding' in str(submodule.named_parameters):
+                  colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
+                                                     self._embedding_dist_spec)
+                  elif 'Linear' in str(submodule.named_parameters):
+                      colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
+                                                         self._linear_dist_spec)
+                  else:
+                      colo_param = _convert_to_coloparam(param, self._device, self._dtype)
 
 [colossalai > booster > plugin > gemini_plugin.py]
-Line 49-50: state_dict = model.state_dict(only_rank_0=False)
-            save_state_dict(state_dict, checkpoint, use_safetensors)
+Line 43: , tp_degree: int
+Line 49-55: if tp_degree == 1:
+                state_dict = model.state_dict(only_rank_0=True)
+            if self.coordinator.is_master():
+                save_state_dict(state_dict, checkpoint, use_safetensors)
+            else:
+                state_dict = model.state_dict(only_rank_0=False)
+                save_state_dict(state_dict, checkpoint, use_safetensors)
 
 [colossalai > booster > booster.py]
 Line 187: tp_degree: int = 1
