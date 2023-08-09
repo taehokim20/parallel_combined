@@ -111,8 +111,8 @@ def init_colo_module(module: torch.nn.Module,
             ################################################
 
             if isinstance(param, ColoParameter):
-                # param.set_process_group(pg)
-                # param.set_dist_spec(dist_spec)
+                param.set_process_group(pg)
+                param.set_dist_spec(dist_spec)
                 param.compute_spec = compute_spec
                 for mod in param.shared_param_modules:
                     modules_update_param.add(mod)

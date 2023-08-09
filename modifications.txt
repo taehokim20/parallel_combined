@@ -3,6 +3,12 @@ Line 8: Add from colossalai.utils import DataParallelSampler
 Line 54: Comment sampler = DistributedSampler(~)
          Add sampler = DataParallelSampler(dataset, shuffle=shuffle)
 
+[colossalai > nn > _ops > embedding.py]
+Totally modified
+
+[colossalai > nn > _ops > linear.py]
+Totally modified
+
 [colossalai > nn > parallel > layers > linear.py]
 Totally modified to distinguish model setting
 
@@ -19,29 +25,16 @@ Line 199-204: if dp_degree > 1:
                   config_dict[dp_degree] = dict(chunk_size=best_chunk_size, keep_gathered=True)
 
 [transformers > trainer.py]
-Line 2286-2287: import GPUtil
-                logs[“gpu_mem”] = GPUtil.getGPUs()[0].memoryUsed
+Line 2649-2651: Check the used GPU memory in the limited condition
 
 [colossalai > nn > parallel > layers > module_utils.py]
 Line 103-111: Avoid the case of bias=False
-Line 114-115: Commented to avoid additional sharding
 Line 119-120: Commented
 
 [colossalai > zero > gemini > colo_init_context.py]
-Line 75-76: embedding_dist_spec=None,
-            linear_dist_spec=None,
-Line 93-94: self._embedding_dist_spec = embedding_dist_spec
-            self._linear_dist_spec = linear_dist_spec
-Line 132-141: if param_name == 'bias':
-                  colo_param = _convert_to_coloparam(param, self._device, self._dtype)
-              elif 'Embedding' in str(submodule.named_parameters):
-                  colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
-                                                     self._embedding_dist_spec)
-                  elif 'Linear' in str(submodule.named_parameters):
-                      colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
-                                                         self._linear_dist_spec)
-                  else:
-                      colo_param = _convert_to_coloparam(param, self._device, self._dtype)
+Line 74-77: Some arguments are added to experiments
+Line 93-95: Added arguments take values
+Line 133-145: Convert model param to coloparam depending on the param name and experimental arguments
 
 [colossalai > booster > plugin > gemini_plugin.py]
 Line 43: , tp_degree: int

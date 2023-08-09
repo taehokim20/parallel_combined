@@ -5,7 +5,6 @@ from torch import nn
 
 from colossalai.tensor import ColoParameter, ColoTensor, ProcessGroup
 from colossalai.utils.model.utils import InsertPostInitMethodToModuleSubClasses
-from colossalai.utils import print_rank_0
 
 # find named_params includes replica
 
@@ -74,7 +73,8 @@ class ColoInitContext(InsertPostInitMethodToModuleSubClasses):
                  default_pg: Optional[ProcessGroup] = None,
                  embedding_dist_spec=None,
                  linear_dist_spec=None,
-                 model_name='llama-7b'):
+                 model_name='llama-7b',
+                 norm_sharding=False):
         """
         Args:
             device (torch.device): the device where parameters initialized are resident. Defaults to torch.device('cpu').
@@ -92,6 +92,7 @@ class ColoInitContext(InsertPostInitMethodToModuleSubClasses):
         self._default_pg = default_pg
         self._embedding_dist_spec = embedding_dist_spec
         self._linear_dist_spec = linear_dist_spec
+        self._norm_sharding = norm_sharding
 
     def _register_colo_modules(self, model_name):
         from colossalai.nn.parallel.layers import ColoEmbedding, ColoLinear, register_colo_module
@@ -135,6 +136,9 @@ class ColoInitContext(InsertPostInitMethodToModuleSubClasses):
                     colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
                                                     self._embedding_dist_spec)
                 elif 'Linear' in str(submodule.named_parameters):
+                    colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
+                                                    self._linear_dist_spec)
+                elif self._norm_sharding:
                     colo_param = _convert_to_coloparam(param, self._device, self._dtype, self._default_pg,
                                                     self._linear_dist_spec)
                 else:

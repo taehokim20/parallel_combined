@@ -1,12 +1,25 @@
 from dataclasses import dataclass, field
 
-import numpy as np
 import torch
 import transformers
 from transformers import GenerationConfig
 
-from train import ModelArguments, smart_tokenizer_and_embedding_resize, DEFAULT_PAD_TOKEN, DEFAULT_EOS_TOKEN, \
-  DEFAULT_BOS_TOKEN, DEFAULT_UNK_TOKEN, PROMPT_DICT
+import time
+import GPUtil
+import psutil
+
+from train import ModelArguments, smart_tokenizer_and_embedding_resize, DEFAULT_PAD_TOKEN, PROMPT_DICT
+
+
+def get_size(bytes, suffix="B"):
+    """
+    Scale bytes to its proper format- KB, MB, GB, TB and PB
+    """
+    factor = 1024
+    for unit in ["", "K", "M", "G", "T", "P"]:
+        if bytes < factor:
+            return f"{bytes:.2f}{unit}{suffix}"
+        bytes /= factor
 
 
 @dataclass
@@ -20,7 +33,7 @@ class InferenceArguments:
     metadata={"help": "Load the model in 8-bit mode."},
   )
   inference_dtype: torch.dtype = field(
-    default=torch.float16,
+    default=torch.bfloat16, #float16,
     metadata={"help": "The dtype to use for inference."},
   )
   override_checkpoint: str = field(
@@ -45,15 +58,17 @@ def inference():
     # load_in_8bit=inference_args.load_in_8bit,
     torch_dtype=inference_args.inference_dtype,
     device_map="auto",
+    # from_tf=True,  ## only for FSDP
   )
   model.cuda()
   model.eval()
 
-  generation_config = GenerationConfig(
-    temperature=0.1,
-    top_p=0.75,
-    num_beams=4,
-  )
+  # generation_config = GenerationConfig(
+  #   temperature=0.1,
+  #   top_p=0.75,
+  #   num_beams=4,
+  # )
+  generation_config = GenerationConfig.from_pretrained(model_args.model_name_or_path)
 
   tokenizer = transformers.AutoTokenizer.from_pretrained(
     model_args.model_name_or_path,
@@ -62,21 +77,15 @@ def inference():
   )
 
   if tokenizer.pad_token is None:
-    # # For size matching of Colossal-AI
-    # tokenizer.pad_token = tokenizer.eos_token
-    # Other cases
-    smart_tokenizer_and_embedding_resize(
-      special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
-      tokenizer=tokenizer,
-      model=model,
-    )
-  tokenizer.add_special_tokens(
-    {
-      "eos_token": DEFAULT_EOS_TOKEN,
-      "bos_token": DEFAULT_BOS_TOKEN,
-      "unk_token": DEFAULT_UNK_TOKEN,
-    }
-  )
+    ### For size matching of Colossal-AI
+    tokenizer.pad_token = tokenizer.eos_token
+    # ### Other cases
+    # smart_tokenizer_and_embedding_resize(
+    #   special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
+    #   tokenizer=tokenizer,
+    #   model=model,
+    # )
+
   if inference_args.override_checkpoint is not None:
     print("Loading override checkpoint.")
     try:
@@ -88,7 +97,7 @@ def inference():
     model.half()
     model.eval()
 
-  ctx = ""
+  total_time = 0
   for instruction in [
     "Tell me about alpacas.",
     "Tell me about the president of Mexico in 2019.",
@@ -102,17 +111,24 @@ def inference():
   ]:
     print("Instruction:", instruction)
     inputs = tokenizer(generate_prompt(instruction, None), return_tensors="pt")
+    st_time = time.time()
     outputs = model.generate(input_ids=inputs["input_ids"].cuda(),
                              generation_config=generation_config,
                              max_new_tokens=inference_args.model_max_length,
                              return_dict_in_generate=True,
                              output_scores=True)
+    st_time = time.time() - st_time
     input_length = 1 if model.config.is_encoder_decoder else inputs.input_ids.shape[1]
     generated_tokens = outputs.sequences[:, input_length:]
 
-    ctx += f"Instruction: {instruction}\n" + f"Response: {generated_tokens[0]}\n"
-    print("Response:", tokenizer.decode(generated_tokens[0]))
+    total_time += st_time
+    print("Response: ", tokenizer.decode(generated_tokens[0]))
+    print('Spent time: {0:.2f}'.format(st_time))
+    print('Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) 
+    print('Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))
     print()
+  
+  print('Total time: {0:.2f}'.format(total_time))
 
 
 if __name__ == "__main__":

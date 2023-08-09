@@ -431,7 +431,7 @@ class Trainer:
                 self.sharded_ddp = ShardedDDPOption.ZERO_DP_2
             elif ShardedDDPOption.ZERO_DP_3 in args.sharded_ddp:
                 self.sharded_ddp = ShardedDDPOption.ZERO_DP_3
-
+        
         self.fsdp = None
         if len(args.fsdp) > 0:
             if args.deepspeed:
@@ -1672,6 +1672,7 @@ class Trainer:
         self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
     ):
         self._train_batch_size = batch_size
+
         # Data loader and number of training steps
         train_dataloader = self.get_train_dataloader()
 
@@ -1696,9 +1697,9 @@ class Trainer:
                 # the best we can do.
                 num_train_samples = args.max_steps * total_train_batch_size
             else:
-                max_steps = math.ceil(args.num_train_epochs * num_update_steps_per_epoch)
-                num_train_epochs = math.ceil(args.num_train_epochs)
-                num_train_samples = self.num_examples(train_dataloader) * args.num_train_epochs
+                max_steps = math.ceil(args.num_train_epochs * num_update_steps_per_epoch) # bs=16: 1221 bs=8: 2439
+                num_train_epochs = math.ceil(args.num_train_epochs) # 3
+                num_train_samples = self.num_examples(train_dataloader) * args.num_train_epochs # 156006
         elif args.max_steps > 0:  # Rely on max_steps when dataloader does not have a working size
             max_steps = args.max_steps
             # Setting a very large number of epochs so we go as many times as necessary over the iterator.
@@ -1711,7 +1712,7 @@ class Trainer:
                 "args.max_steps must be set to a positive value if dataloader does not have a length, was"
                 f" {args.max_steps}"
             )
-
+        
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps and args.logging_steps < 1:
             args.logging_steps = math.ceil(max_steps * args.logging_steps)
@@ -1740,7 +1741,7 @@ class Trainer:
         if args.deepspeed:
             deepspeed_engine, optimizer, lr_scheduler = deepspeed_init(
                 self, num_training_steps=max_steps, resume_from_checkpoint=resume_from_checkpoint
-            )
+            ) # GPU mem: 4191 -> 20071
             self.model = deepspeed_engine.module
             self.model_wrapped = deepspeed_engine
             self.deepspeed = deepspeed_engine
@@ -1906,6 +1907,7 @@ class Trainer:
                 rng_to_sync = True
 
             step = -1
+            max_seq_len=0
             for step, inputs in enumerate(epoch_iterator):
                 total_batched_samples += 1
                 if rng_to_sync:
@@ -1937,7 +1939,7 @@ class Trainer:
                     with model.no_sync():
                         tr_loss_step = self.training_step(model, inputs)
                 else:
-                    tr_loss_step = self.training_step(model, inputs)
+                    tr_loss_step = self.training_step(model, inputs) # e.g., 19383 -> 20839
 
                 if (
                     args.logging_nan_inf_filter
@@ -1953,7 +1955,7 @@ class Trainer:
 
                 # Optimizer step for deepspeed must be called on every step regardless of the value of gradient_accumulation_steps
                 if self.deepspeed:
-                    self.deepspeed.step()
+                    self.deepspeed.step() # e.g., 20839 -> 26467
 
                 if total_batched_samples % args.gradient_accumulation_steps == 0 or (
                     # last step in epoch but step is always smaller than gradient_accumulation_steps
@@ -2022,6 +2024,7 @@ class Trainer:
 
                 if self.control.should_epoch_stop or self.control.should_training_stop:
                     break
+
             if step < 0:
                 logger.warning(
                     "There seems to be not a single sample in your epoch_iterator, stopping training at step"
@@ -2282,10 +2285,6 @@ class Trainer:
             self._total_loss_scalar += tr_loss_scalar
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
-
-            if epoch >= 2.99:
-                import GPUtil                                    ###
-                logs["gpu_mem"] = GPUtil.getGPUs()[0].memoryUsed ###
 
             self.log(logs)
 
@@ -2644,8 +2643,12 @@ class Trainer:
             logs (`Dict[str, float]`):
                 The values to log.
         """
+
         if self.state.epoch is not None:
             logs["epoch"] = round(self.state.epoch, 2)
+            if (logs["epoch"] * 100) % 100 == 0:
+                import GPUtil
+                logs["gpu_mem"] = GPUtil.getGPUs()[0].memoryUsed
 
         output = {**logs, **{"step": self.state.global_step}}
         self.state.log_history.append(output)

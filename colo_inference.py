@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 
-import numpy as np
 import torch
 import transformers
 from transformers import GenerationConfig
@@ -8,11 +7,11 @@ import colossalai
 from colossalai.zero import ColoInitContext
 from colossalai.utils import get_current_device
 from colossalai.tensor import ProcessGroup, ShardSpec, ComputePattern, ComputeSpec
-from colossalai.nn.parallel.layers import init_colo_module
-from colossalai.cluster import DistCoordinator
 import torch.distributed as dist
 from colossalai.logging import disable_existing_loggers, get_dist_logger
-import sys
+import time
+import GPUtil
+import psutil
 
 from transformers import AutoConfig
 # LLaMA
@@ -22,8 +21,18 @@ from transformers.models.llama.modeling_llama import LlamaForCausalLM
 import transformers.models.opt.modeling_opt
 from transformers.models.opt.modeling_opt import OPTForCausalLM
 
-from train import ModelArguments, smart_tokenizer_and_embedding_resize, DEFAULT_PAD_TOKEN, DEFAULT_EOS_TOKEN, \
-  DEFAULT_BOS_TOKEN, DEFAULT_UNK_TOKEN, PROMPT_DICT
+from train import ModelArguments, PROMPT_DICT
+
+
+def get_size(bytes, suffix="B"):
+    """
+    Scale bytes to its proper format- KB, MB, GB, TB and PB
+    """
+    factor = 1024
+    for unit in ["", "K", "M", "G", "T", "P"]:
+        if bytes < factor:
+            return f"{bytes:.2f}{unit}{suffix}"
+        bytes /= factor
 
 
 @dataclass
@@ -58,7 +67,6 @@ def inference():
   dp_degree=1
   dims=-1 # 0: by row (bs=8, peak_mem=28487 MB), -1: by col (bs=8, peak_mem=24855 MB)
   disable_existing_loggers()
-  import transformers.models.llama.modeling_llama
   colossalai.launch_from_torch(config=dict(parallel=dict(data=dp_degree, pipeline=1, 
                                                            tensor=dict(size=tp_degree, mode='1d'))))
   parser = transformers.HfArgumentParser((ModelArguments, InferenceArguments))
@@ -66,30 +74,18 @@ def inference():
   logger = get_dist_logger()
   shard_pg = ProcessGroup(tp_degree=tp_degree)
   embedding_dist_spec = ShardSpec([-1], [tp_degree])
-  linear_dist_spec = ShardSpec([0], [tp_degree])
+  linear_dist_spec = ShardSpec([-1], [tp_degree])
         
   with ColoInitContext(device=get_current_device(), embedding_dist_spec=embedding_dist_spec, 
                        linear_dist_spec=linear_dist_spec, default_pg=shard_pg,
                        model_name=model_args.model_name_or_path):
     model_config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-    if 'llama-7b' in model_args.model_name_or_path:
+    if 'llama' in model_args.model_name_or_path:
       model = LlamaForCausalLM(model_config)
-    elif 'opt-6.7b' in model_args.model_name_or_path:
+    elif 'opt' in model_args.model_name_or_path:
       model = OPTForCausalLM(model_config)
-    # model = transformers.AutoModelForCausalLM.from_pretrained(
-    #   model_args.model_name_or_path,
-    #   # load_in_8bit=inference_args.load_in_8bit,
-    #   # torch_dtype=inference_args.inference_dtype,
-    #   # device_map="auto",
-    # )
-    model.cuda()
-    model.eval()
-
-    generation_config = GenerationConfig(
-      temperature=0.1,
-      top_p=0.75,
-      num_beams=4,
-    )
+    # model.cuda()
+    # model.eval()
 
     tokenizer = transformers.AutoTokenizer.from_pretrained(
       model_args.model_name_or_path,
@@ -98,24 +94,15 @@ def inference():
     )
 
     if tokenizer.pad_token is None:
-      # For size matching of Colossal-AI
       tokenizer.pad_token = tokenizer.eos_token
-      # # Other cases
-      # smart_tokenizer_and_embedding_resize(
-      #   special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
-      #   tokenizer=tokenizer,
-      #   model=model,
-      # )
-    tokenizer.add_special_tokens(
-      {
-        "eos_token": DEFAULT_EOS_TOKEN,
-        "bos_token": DEFAULT_BOS_TOKEN,
-        "unk_token": DEFAULT_UNK_TOKEN,
-      }
-    )
 
-  compute_spec = ComputeSpec(ComputePattern.TP1D)
-  init_colo_module(model, compute_spec, pg=shard_pg, recursive=True)
+    for n, p in model.named_parameters():       
+      if not 'norm' in n and not 'bias' in n:
+        p.compute_spec = ComputeSpec(ComputePattern.TP1D)
+  
+  print('Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) 
+  print('Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))
+
   if inference_args.override_checkpoint is not None:
     logger.info("Loading override checkpoint.", ranks=[0])
     try:
@@ -124,44 +111,58 @@ def inference():
     except:
       raise Exception("Failed to load checkpoint")
     model.cuda()
-    model.half()
+    # model.half()
     model.eval()
 
-    # ctx = ""
-    for instruction in [
-      "Tell me about alpacas.",
-      "Tell me about the president of Mexico in 2019.",
-      "Tell me about the king of France in 2019.",
-      "List all Canadian provinces in alphabetical order.",
-      "Write a Python program that prints the first 10 Fibonacci numbers.",
-      "Write a program that prints the numbers from 1 to 100. But for multiples of three print 'Fizz' instead of the number and for the multiples of five print 'Buzz'. For numbers which are multiples of both three and five print 'FizzBuzz'.",
-      "Tell me five words that rhyme with 'shock'.",
-      "Translate the sentence 'I have no mouth but I must scream' into Spanish.",
-      "Count up from 1 to 500.",
-    ]:
-      inputs = tokenizer(generate_prompt(instruction, None), return_tensors="pt")
-      dist.broadcast(inputs['input_ids'].cuda(), src=0)
-      if dist.get_rank() == 0:
-        # logger.info("Instruction: {}".format(instruction), ranks=[0])
-        print("Instruction: {}".format(instruction))
-        outputs = model.generate(input_ids=inputs["input_ids"].cuda(),
-                                generation_config=generation_config,
-                                max_new_tokens=inference_args.model_max_length,
-                                return_dict_in_generate=True,
-                                output_scores=True)
-        input_length = 1 if model.config.is_encoder_decoder else inputs.input_ids.shape[1]
-        generated_tokens = outputs.sequences[:, input_length:]
+  # generation_config = GenerationConfig(
+  #   temperature=0.1,
+  #   top_p=0.75,
+  #   num_beams=4,
+  # )
+  generation_config = GenerationConfig.from_pretrained(model_args.model_name_or_path)
 
-        # ctx += f"Instruction: {instruction}\n" + f"Response: {generated_tokens[0]}\n"
-        # logger.info("Response: {}".format(tokenizer.decode(generated_tokens[0])), ranks=[0])
-        print("Response: {}".format(tokenizer.decode(generated_tokens[0])))
-        print()
-      else:
-        model.generate(input_ids=inputs["input_ids"].cuda(),
-                                generation_config=generation_config,
-                                max_new_tokens=inference_args.model_max_length,
-                                return_dict_in_generate=True,
-                                output_scores=True)
+  total_time = 0
+  for instruction in [
+    "Tell me about alpacas.",
+    "Tell me about the president of Mexico in 2019.",
+    "Tell me about the king of France in 2019.",
+    "List all Canadian provinces in alphabetical order.",
+    "Write a Python program that prints the first 10 Fibonacci numbers.",
+    "Write a program that prints the numbers from 1 to 100. But for multiples of three print 'Fizz' instead of the number and for the multiples of five print 'Buzz'. For numbers which are multiples of both three and five print 'FizzBuzz'.",
+    "Tell me five words that rhyme with 'shock'.",
+    "Translate the sentence 'I have no mouth but I must scream' into Spanish.",
+    "Count up from 1 to 500.",
+  ]:
+    inputs = tokenizer(generate_prompt(instruction, None), return_tensors="pt")
+    dist.broadcast(inputs['input_ids'].cuda(), src=0)
+    if dist.get_rank() == 0:
+      # logger.info("Instruction: {}".format(instruction), ranks=[0])
+      print("Instruction: {}".format(instruction))
+      st_time = time.time()
+      outputs = model.generate(input_ids=inputs["input_ids"].cuda(),
+                              generation_config=generation_config,
+                              max_new_tokens=inference_args.model_max_length,
+                              return_dict_in_generate=True,
+                              output_scores=True)
+      st_time = time.time() - st_time
+      input_length = 1 if model.config.is_encoder_decoder else inputs.input_ids.shape[1]
+      generated_tokens = outputs.sequences[:, input_length:]
+
+      total_time += st_time
+      print("Response: {}".format(tokenizer.decode(generated_tokens[0])))
+      print('Spent time: {0:.2f}'.format(st_time))
+      print('Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) 
+      print('Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))
+      print()
+    else:
+      model.generate(input_ids=inputs["input_ids"].cuda(),
+                              generation_config=generation_config,
+                              max_new_tokens=inference_args.model_max_length,
+                              return_dict_in_generate=True,
+                              output_scores=True)
+  
+  if dist.get_rank() == 0:
+    print('Total time: {0:.2f}'.format(total_time))
 
 
 if __name__ == "__main__":
