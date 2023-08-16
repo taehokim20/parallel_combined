@@ -34,11 +34,15 @@ from colossalai.zero import ColoInitContext
 from colossalai.booster import Booster
 from colossalai.booster.plugin import GeminiPlugin
 from colossalai.cluster import DistCoordinator
-from colossalai.context import ParallelMode
+from colossalai.context import ParallelMode, ParallelContext
+from colossalai.pipeline.pipelinable import PipelinableContext
 import torch.distributed as dist
 from tqdm import tqdm
 from colossalai.tensor import ProcessGroup, ShardSpec, ComputePattern, ComputeSpec
+from colossalai.nn.parallel.layers import init_colo_module
 from colossalai.core import global_context as gpc
+import sys
+import time
 from statistics import mean
 import GPUtil
 import psutil
@@ -58,44 +62,31 @@ def move_to_cuda(batch, device):
 
 def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coordinator, tp_dim=0, 
                 batch_size=1, tp_degree=None, dims=None):
-    print_rank_0('[3]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 32077 MB / 8243 MB
+    print_rank_0('[3]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 32077 MB
     print_rank_0('[3]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used))) # 18.82 GB
-    # print_rank_0('[3]Max allocated GPU mem: {0}'.format(get_size(torch.cuda.max_memory_allocated())))
     torch.cuda.synchronize()
     model.train()
     losses = []
-    # for step, inputs in enumerate(dataloader):
-    #     # if inputs["input_ids"].size()[1] == 512:
-    #         # print_rank_0(step)
-    #         # print_rank_0(inputs)
-    #         # print_rank_0(inputs["input_ids"].size())
-    #         # print_rank_0(inputs['labels'].size())
-    #         # print_rank_0(inputs['attention_mask'].size())
-    #         # print_rank_0(" ")
-    #     # if inputs["input_ids"].size()[1] == 512:
-    #     #     max_seq_len = inputs["input_ids"].size()[1]
-    #     #     batch = move_to_cuda(inputs, torch.cuda.current_device())
-    #     #     outputs = model(use_cache=False, **batch)
-    #     #     loss = outputs['loss']
-    #     #     optimizer.zero_grad()
-    #     #     booster.backward(loss, optimizer)
-    #     #     optimizer.step()
-    #     #     lr_scheduler.step()
-    #     #     if dist.get_rank() == 0:
-    #     #         with open('temp.txt', 'a') as f:
-    #     #             f.write('{0}\n'.format(GPUtil.getGPUs()[0].memoryUsed))
-    #     #     torch.cuda.empty_cache()
-    #     #     # print_rank_0('[Initial step] step: {0}, GPU mem: {1}'.format(step, GPUtil.getGPUs()[0].memoryUsed))
-
-
     with tqdm(dataloader, desc=f'Epoch [{epoch + 1}]', disable=not coordinator.is_master()) as pbar:
-        step=1
-        for batch in pbar:
+        for batch in pbar: # Iters - 2 GPUs: 13000(=52000/(2*2)), 4 GPUs: 3250(=52000/(4*4)), 8 GPUs: 812
+            # if tp_dim == 1:
+            #     if int(dist.get_rank() / 2) == 0:
+            #         batch["input_ids"] = batch["input_ids"][0:int(batch_size / 2)]
+            #         batch["labels"] = batch["labels"][0:int(batch_size / 2)]
+            #         batch["attention_mask"] = batch["attention_mask"][0:int(batch_size / 2)]
+            #     else:
+            #         batch["input_ids"] = batch["input_ids"][int(batch_size / 2):batch_size]
+            #         batch["labels"] = batch["labels"][int(batch_size / 2):batch_size]
+            #         batch["attention_mask"] = batch["attention_mask"][int(batch_size / 2):batch_size]
+            # if tp_dim == 1:
+            #     batch["input_ids"] = batch["input_ids"].chunk(tp_degree[tp_dim][0], dim=dims[tp_dim][0])[gpc.get_local_rank(ParallelMode.PARALLEL_2D_COL)]
+            #     batch["input_ids"] = batch["input_ids"].chunk(tp_degree[tp_dim][1], dim=dims[tp_dim][1])[gpc.get_local_rank(ParallelMode.PARALLEL_2D_ROW)]
+            #     batch["labels"] = batch["labels"].chunk(tp_degree[tp_dim][0], dim=dims[tp_dim][0])[gpc.get_local_rank(ParallelMode.PARALLEL_2D_COL)]
+            #     batch["labels"] = batch["labels"].chunk(tp_degree[tp_dim][1], dim=dims[tp_dim][1])[gpc.get_local_rank(ParallelMode.PARALLEL_2D_ROW)]
+            #     batch["attention_mask"] = batch["attention_mask"].chunk(tp_degree[tp_dim][0], dim=dims[tp_dim][0])[gpc.get_local_rank(ParallelMode.PARALLEL_2D_COL)]
+            #     batch["attention_mask"] = batch["attention_mask"].chunk(tp_degree[tp_dim][1], dim=dims[tp_dim][1])[gpc.get_local_rank(ParallelMode.PARALLEL_2D_ROW)]
             # Forward
             batch = move_to_cuda(batch, torch.cuda.current_device())
-            if batch["input_ids"].size()[1] == 512:
-                torch.cuda.reset_peak_memory_stats()
-                torch.cuda.empty_cache()
             outputs = model(use_cache=False, **batch)
             loss = outputs['loss']
             # Backward
@@ -107,23 +98,16 @@ def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coor
             # pbar.set_postfix({'loss': loss.item(), 'Memory usage': GPUtil.getGPUs()[0].memoryUsed})
             pbar.set_postfix({'loss': loss.item()}) 
             losses.append(loss.item())
-            if dist.get_rank() == 0:
-                with open('temp.txt', 'a') as f:
-                    f.write('{0}\n'.format(GPUtil.getGPUs()[0].memoryUsed))
-            step += 1
-            # if dist.get_rank() == 0:
-            #     # with open('llama-7b_seq.txt', 'a') as f:
-            #     #     f.write('{0}\n'.format(batch["input_ids"].size()[1]))
-            #     with open('opt-13b_mem_5per.txt', 'a') as f:
-            #         f.write('{0}\n'.format(GPUtil.getGPUs()[0].memoryUsed))
-                
     
     print_rank_0('Average loss of epoch {0}: {1:.2f}, Memory usage: {2}'.format(epoch + 1, mean(losses), 
                                                                                 GPUtil.getGPUs()[0].memoryUsed))
-    # print_rank_0('torch.cuda.max_memory_allocated: {0}'.format(get_size(torch.cuda.max_memory_allocated())))
 
 
 IGNORE_INDEX = -100
+DEFAULT_PAD_TOKEN = "[PAD]"
+DEFAULT_EOS_TOKEN = "</s>"
+DEFAULT_BOS_TOKEN = "<s>"
+DEFAULT_UNK_TOKEN = "<unk>"
 PROMPT_DICT = {
     "prompt_input": (
         "Below is an instruction that describes a task, paired with an input that provides further context. "
@@ -264,11 +248,13 @@ def get_size(bytes, suffix="B"):
 
 
 def train():
-    tp_size=8
+    dp_degree=1
+    world_size=8
     norm_sharding=False
     tp_dim=0 # 0: 1D TP, 1: 2D TP, 2: 2.5D TP, 3: 3D TP
     mode=['1d', '2d', '2.5d', '3d']
-    tp_degree=[[tp_size], [2, 2], [2, 2, 2], [2, 2, 2]]
+    tp_degree=[[world_size], [2, 2], [2, 2, 2], [2, 2, 2]]
+    # 1D TP (recommend: -1) - 0: by row (bs=8, peak_mem=28487 MB), -1: by col (bs=8, peak_mem=24855 MB)
     dims_e=[[-1], [0, -1], [0, 0, -1], [0, 0, -1]]
     dims_l=[[-1], [0, -1], [0, 0, -1], [0, 0, -1]]
     # Compute Pattern
@@ -279,36 +265,37 @@ def train():
     # colossalai.launch_from_torch(config={})
     # Tensor Parallelism
     if mode == '2.5d':
-        colossalai.launch_from_torch(config=dict(parallel=dict(data=1, pipeline=1,
-                                    tensor=dict(size=tp_size, mode=mode[tp_dim], depth=2))))
+        colossalai.launch_from_torch(config=dict(parallel=dict(data=dp_degree, pipeline=1,
+                                    tensor=dict(size=world_size, mode=mode[tp_dim], depth=2))))
     else:
-        colossalai.launch_from_torch(config=dict(parallel=dict(data=1, pipeline=1, 
-                                    tensor=dict(size=tp_size, mode=mode[tp_dim]))))
+        colossalai.launch_from_torch(config=dict(parallel=dict(data=dp_degree, pipeline=1, 
+                                    tensor=dict(size=world_size, mode=mode[tp_dim]))))
     
-    parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
-    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     coordinator = DistCoordinator()
     world_size = coordinator.world_size
     # Manage loggers
     disable_existing_loggers()
     logger = get_dist_logger()
 
-    print_rank_0('[0]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed))  # 3 MB / 1421 MB
-    # print_rank_0('[0]Virtual total mem: {0}'.format(get_size(psutil.virtual_memory().total)))  # 1.10 TB
-    print_rank_0('[0]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))  # 8.65 GB / 14.55 GB
-    print_rank_0('[0]Max allocated GPU mem: {0}'.format(get_size(torch.cuda.max_memory_allocated())))
+    parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
+    model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    shard_pg = ProcessGroup(tp_degree=tp_size)
+    # with PipelinableContext():
+
+    shard_pg = ProcessGroup(tp_degree=world_size)
     embedding_dist_spec = ShardSpec(dims_e[tp_dim], tp_degree[tp_dim])
     linear_dist_spec = ShardSpec(dims_l[tp_dim], tp_degree[tp_dim])
-
+    
+    print_rank_0('[0]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed))  # 1421 MB
+    print_rank_0('[0]Virtual total mem: {0}'.format(get_size(psutil.virtual_memory().total)))  # 1.10 TB
+    print_rank_0('[0]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))  # 14.55 GB
     with ColoInitContext(device=get_current_device(), embedding_dist_spec=embedding_dist_spec, 
                          linear_dist_spec=linear_dist_spec, default_pg=shard_pg,
                          model_name=model_args.model_name_or_path, norm_sharding=norm_sharding):
         model_config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-        if 'llama' in model_args.model_name_or_path:
+        if 'llama-7b' in model_args.model_name_or_path:
             model = LlamaForCausalLM(model_config)
-        elif 'opt' in model_args.model_name_or_path:
+        elif 'opt-6.7b' in model_args.model_name_or_path:
             model = OPTForCausalLM(model_config)
 
         model.gradient_checkpointing_enable()
@@ -321,8 +308,16 @@ def train():
             use_fast=False,
         )
 
+        special_tokens_dict = dict()
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+            special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN    # "[PAD]" -> only this one is included
+        if tokenizer.eos_token is None:
+            special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN    # "</s>"
+        if tokenizer.bos_token is None:
+            special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN    # "<s>"
+        if tokenizer.unk_token is None:
+            special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN    # "<unk>"
 
         data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)           
 
@@ -331,24 +326,15 @@ def train():
         from safetensors.torch import load_file  
         state_dict.update(load_file("/home/ubuntu/.cache/huggingface/hub/models--huggyllama--llama-7b/snapshots/8416d3fefb0cb3ff5775a7b13c1692d10ff1aa16/model-00001-of-00002.safetensors"))
         state_dict.update(load_file("/home/ubuntu/.cache/huggingface/hub/models--huggyllama--llama-7b/snapshots/8416d3fefb0cb3ff5775a7b13c1692d10ff1aa16/model-00002-of-00002.safetensors"))
-    elif 'llama-13b' in model_args.model_name_or_path:
-        from safetensors.torch import load_file  
-        state_dict.update(load_file("/home/ubuntu/.cache/huggingface/hub/models--huggyllama--llama-13b/snapshots/bf57045473f207bb1de1ed035ace226f4d9f9bba/model-00001-of-00003.safetensors"))
-        state_dict.update(load_file("/home/ubuntu/.cache/huggingface/hub/models--huggyllama--llama-13b/snapshots/bf57045473f207bb1de1ed035ace226f4d9f9bba/model-00002-of-00003.safetensors"))
-        state_dict.update(load_file("/home/ubuntu/.cache/huggingface/hub/models--huggyllama--llama-13b/snapshots/bf57045473f207bb1de1ed035ace226f4d9f9bba/model-00003-of-00003.safetensors"))
     elif 'opt-6.7b' in model_args.model_name_or_path:
         state_dict.update(torch.load("/home/ubuntu/.cache/huggingface/hub/models--facebook--opt-6.7b/snapshots/a45aa65bbeb77c1558bc99bedc6779195462dab0/pytorch_model-00001-of-00002.bin"))
         state_dict.update(torch.load("/home/ubuntu/.cache/huggingface/hub/models--facebook--opt-6.7b/snapshots/a45aa65bbeb77c1558bc99bedc6779195462dab0/pytorch_model-00002-of-00002.bin"))
-    elif 'opt-13b' in model_args.model_name_or_path:
-        state_dict.update(torch.load("/home/ubuntu/.cache/huggingface/hub/models--facebook--opt-13b/snapshots/e515202d1e7750da62d245fbccb2723b9c1790f5/pytorch_model-00001-of-00003.bin"))
-        state_dict.update(torch.load("/home/ubuntu/.cache/huggingface/hub/models--facebook--opt-13b/snapshots/e515202d1e7750da62d245fbccb2723b9c1790f5/pytorch_model-00002-of-00003.bin"))
-        state_dict.update(torch.load("/home/ubuntu/.cache/huggingface/hub/models--facebook--opt-13b/snapshots/e515202d1e7750da62d245fbccb2723b9c1790f5/pytorch_model-00003-of-00003.bin"))
     
     for n, p in model.named_parameters():
-        if 'opt' in model_args.model_name_or_path: # opt-6.7b, opt-13b
+        if 'opt-6.7b' in model_args.model_name_or_path:
             n = n.replace('model.', '')
-        x = state_dict[n]  
-        if not 'norm' in n and not 'bias' in n:
+        x = state_dict[n]        
+        if norm_sharding or not 'norm' in n and not 'bias' in n:
             p.compute_spec = compute_spec[tp_dim]
             if mode[tp_dim] == '1d':
                 x = x.chunk(tp_degree[tp_dim][0], dim=dims_l[tp_dim][0])
@@ -364,14 +350,22 @@ def train():
                 x = x.chunk(tp_degree[tp_dim][0], dim=dims_l[tp_dim][0])[gpc.get_local_rank(ParallelMode.PARALLEL_3D_WEIGHT)]
                 x = x.chunk(tp_degree[tp_dim][1], dim=dims_l[tp_dim][1])[gpc.get_local_rank(ParallelMode.PARALLEL_3D_INPUT)]
                 x = x.chunk(tp_degree[tp_dim][2], dim=dims_l[tp_dim][2])[gpc.get_local_rank(ParallelMode.PARALLEL_3D_OUTPUT)]
+            # if 'embed' in n:
+            #     x = x.chunk(tp_degree[tp_dim], dim=dims_e[tp_dim])
+            #     x = x[dist.get_rank() % tp_degree[tp_dim]]
+            # else:
+            #     x = x.chunk(tp_degree[tp_dim], dim=dims_l[tp_dim])
+            #     x = x[dist.get_rank() % tp_degree[tp_dim]]
         p.data.copy_(x)
     
-    print_rank_0('[1]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 27189 MB // When sharding in with ColoInitContext 5545 MB -> 4957 MB
+    print_rank_0('[1]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 27189 MB // When sharding in with ColoInitContext 5545 MB
     print_rank_0('[1]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used))) # 14.61 GB
-    print_rank_0('[1]Max allocated GPU mem: {0}'.format(get_size(torch.cuda.max_memory_allocated())))
+
+    # init_colo_module(model, compute_spec[tp_dim], pg=shard_pg, recursive=True)
 
     # Set plugin
     booster_kwargs = {}
+    # booster_kwargs['mixed_precision'] = 'fp16'
     plugin = GeminiPlugin(device=get_current_device(),
                           placement_policy='cuda',
                           precision='bf16',
@@ -395,9 +389,7 @@ def train():
     num_warmup_steps = int(config['warmup_ratio'] * total_steps)
         
     # Set optimizer
-    # optimizer = HybridAdam(model.parameters(), lr=(config['lr'] * world_size), weight_decay=0.0)
-    # optimizer = HybridAdam(model.parameters(), lr=(config['lr'] * int(world_size / tp_size)), weight_decay=0.0)
-    optimizer = HybridAdam(model.parameters(), lr=config['lr'], weight_decay=0.0)
+    optimizer = HybridAdam(model.parameters(), lr=(config['lr'] * world_size), weight_decay=0.0)
 
     # Set lr scheduler
     lr_scheduler = get_cosine_schedule_with_warmup(
@@ -408,23 +400,18 @@ def train():
 
     booster = Booster(plugin=plugin, **booster_kwargs)
     model, optimizer, _, _, _ = booster.boost(model, optimizer)
-    print_rank_0('[2]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed))
-    print_rank_0('[2]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))
-    print_rank_0('[2]Max allocated GPU mem: {0}'.format(get_size(torch.cuda.max_memory_allocated())))
-    torch.cuda.reset_peak_memory_stats()
-    torch.cuda.empty_cache()
 
     # Start finetuning
     logger.info(f"Start finetuning", ranks=[0])
     for epoch in range(config['epochs']):
+       # 
        train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coordinator, 
                    tp_dim=tp_dim, batch_size=config['batch_size']) #tp_degree=tp_degree, dims=dims_l) 
-       torch.cuda.empty_cache()
 
     # Finish training and evaluate
     logger.info(f"Finish finetuning", ranks=[0])
-    output_dir = training_args.output_dir + '/shard_' + str(dist.get_rank()) + '.pt'
-    booster.save_model(model, output_dir, tp_degree=world_size)
+    output_dir = './trained/shard_colo_llama-7b/shard_' + str(dist.get_rank()) + '.pt'
+    booster.save_model(model, output_dir, tp_degree=tp_degree)
     logger.info(f"Saving model checkpoint to {output_dir}")
 
 

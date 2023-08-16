@@ -11,6 +11,8 @@
 #    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #    See the License for the specific language governing permissions and
 #    limitations under the License.
+
+import os
 import copy
 import logging
 from dataclasses import dataclass, field
@@ -20,57 +22,57 @@ import torch
 import transformers
 import utils
 from torch.utils.data import Dataset
+from transformers import Trainer
 from transformers import get_cosine_schedule_with_warmup
 
 import colossalai
 from colossalai.nn.optimizer import HybridAdam
 from colossalai.logging import disable_existing_loggers, get_dist_logger
-from colossalai.utils import get_current_device, print_rank_0
+from colossalai.tensor import ProcessGroup, ShardSpec
+from colossalai.utils import get_current_device
+from colossalai.zero import ColoInitContext
 from colossalai.booster import Booster
-from colossalai.booster.plugin import GeminiPlugin
+from colossalai.booster.plugin import GeminiPlugin, LowLevelZeroPlugin, TorchDDPPlugin, TorchFSDPPlugin
 from colossalai.cluster import DistCoordinator
 
 from tqdm import tqdm
-from statistics import mean
-import GPUtil
-import psutil
 
 
 def move_to_cuda(batch, device):
     return {k: v.to(device) for k, v in batch.items()}
 
 
-def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coordinator):
-    print_rank_0('[2]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # 28189 MB / 7913 MB
-    print_rank_0('[2]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))
+def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coordinator, grad_accum_steps=None):
     torch.cuda.synchronize()
     model.train()
-    losses = []
+    optimizer.zero_grad()
+    accum = 1
+    if grad_accum_steps:
+        accum = grad_accum_steps
     with tqdm(dataloader, desc=f'Epoch [{epoch + 1}]', disable=not coordinator.is_master()) as pbar:
-        for batch in pbar:
+        for idx, batch in enumerate(pbar):
             # Forward
             batch = move_to_cuda(batch, torch.cuda.current_device())
-            # if batch["input_ids"].size()[1] == 512:
-            #     torch.cuda.reset_peak_memory_stats()
-            #     torch.cuda.empty_cache()
-            outputs = model(use_cache=False, **batch) 
-            loss = outputs['loss']
-            # Backward
-            optimizer.zero_grad()
-            booster.backward(loss, optimizer)
-            optimizer.step()
-            lr_scheduler.step()
+            if grad_accum_steps and (idx+1) % grad_accum_steps != 0:
+                outputs = model(use_cache=False, **batch)
+                loss = outputs['loss'] / accum
+                booster.backward(loss, optimizer)
+            else:
+                outputs = model(use_cache=False, **batch)
+                loss = outputs['loss'] / accum
+                booster.backward(loss, optimizer)
+                optimizer.step()
+                lr_scheduler.step()
+                optimizer.zero_grad()
             # Print batch loss
-            print_rank_0('{0}'.format(GPUtil.getGPUs()[0].memoryUsed))
-            # pbar.set_postfix({'loss': loss.item(), 'Memory usage': GPUtil.getGPUs()[0].memoryUsed})
             pbar.set_postfix({'loss': loss.item()})
-            losses.append(loss.item())
-
-    print_rank_0('Average loss of epoch {0}: {1:.2f}, Memory usage: {2}'.format(epoch + 1, mean(losses), 
-                                                                                GPUtil.getGPUs()[0].memoryUsed))
 
 
 IGNORE_INDEX = -100
+DEFAULT_PAD_TOKEN = "[PAD]"
+DEFAULT_EOS_TOKEN = "</s>"
+DEFAULT_BOS_TOKEN = "<s>"
+DEFAULT_UNK_TOKEN = "<unk>"
 PROMPT_DICT = {
     "prompt_input": (
         "Below is an instruction that describes a task, paired with an input that provides further context. "
@@ -114,8 +116,8 @@ def smart_tokenizer_and_embedding_resize(
 
     Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
     """
-    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict) # special_tokens_dict = {'pad_token': '[PAD]'}
-    model.resize_token_embeddings(len(tokenizer))    
+    num_new_tokens = tokenizer.add_special_tokens(special_tokens_dict)
+    model.resize_token_embeddings(len(tokenizer))
 
     if num_new_tokens > 0:
         input_embeddings = model.get_input_embeddings().weight.data
@@ -222,45 +224,24 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer, dat
     return dict(train_dataset=train_dataset, eval_dataset=None, data_collator=data_collator)
 
 
-def get_size(bytes, suffix="B"):
-    """
-    Scale bytes to its proper format- KB, MB, GB, TB and PB
-    """
-    factor = 1024
-    for unit in ["", "K", "M", "G", "T", "P"]:
-        if bytes < factor:
-            return f"{bytes:.2f}{unit}{suffix}"
-        bytes /= factor
-
-
 def train():
-    tp_degree = 1
-    ## for LLaMA models
-    import transformers.models.llama.modeling_llama
+    os.environ['NCCL_BLOCKING_WAIT'] = '1'
     # Launch ColossalAI
     colossalai.launch_from_torch(config={}, seed=0)
     coordinator = DistCoordinator()
     world_size = coordinator.world_size
-    # Manage loggers
-    disable_existing_loggers()
-    logger = get_dist_logger()
+    # # Manage loggers
+    # disable_existing_loggers()
+    # logger = get_dist_logger()
 
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    print_rank_0('[0]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed))  # 1421 MB
-    print_rank_0('[0]Virtual total mem: {0}'.format(get_size(psutil.virtual_memory().total)))  # 1.10 TB
-    print_rank_0('[0]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))  # 14.55 GB
-
     model = transformers.AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
-        # ignore_mismatched_sizes=True,
-    ).to('cuda')
+    )
 
-    model.gradient_checkpointing_enable()
-
-    # with barrier_context(executor_rank=0, parallel_mode=ParallelMode.PARALLEL_1D):   ####
     tokenizer = transformers.AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
@@ -268,22 +249,33 @@ def train():
         padding_side="right",
         use_fast=False,
     )
-
+    special_tokens_dict = dict()
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
+    if tokenizer.eos_token is None:
+        special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
+    if tokenizer.bos_token is None:
+        special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
+    if tokenizer.unk_token is None:
+        special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
 
-    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args) 
+    smart_tokenizer_and_embedding_resize(
+        special_tokens_dict=special_tokens_dict,
+        tokenizer=tokenizer,
+        model=model,
+    )
 
-    print_rank_0('[1]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed))  # 27189 MB
-    print_rank_0('[1]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))   
+    # chk = torch.load("./trained/saved_model.pt")
+    # model.load_state_dict(chk)
 
+    data_module = make_supervised_data_module(tokenizer=tokenizer, data_args=data_args)
     # Set plugin
     booster_kwargs = {}
-    # booster_kwargs['mixed_precision'] = 'fp16'
+    # booster_kwargs['mixed_precision'] = 'bf16'
     plugin = GeminiPlugin(device=get_current_device(),
                           placement_policy='cuda',
                           precision='bf16',
-                          pin_memory=False, #True,
+                          pin_memory=True,
                           strict_ddp_mode=False,
                           initial_scale=2**5)
     # plugin = TorchFSDPPlugin() # does not work with
@@ -295,19 +287,18 @@ def train():
         'epochs': int(training_args.num_train_epochs),
         'warmup_ratio': training_args.warmup_ratio,
         'weight_decay': training_args.weight_decay,
+        'grad_accum_steps': training_args.gradient_accumulation_steps,
     }
 
     dataloader = plugin.prepare_dataloader(data_module['train_dataset'],
                                            batch_size=config['batch_size'],
-                                           shuffle=False,
+                                           shuffle=True,
                                            drop_last=True,
                                            collate_fn=data_module['data_collator'])
-    
-    
-    
     # Set optimizer
-    # optimizer = HybridAdam(model.parameters(), lr=(config['lr'] * world_size), weight_decay=0.0)
-    optimizer = HybridAdam(model.parameters(), lr=config['lr'], weight_decay=0.0)
+    optimizer = HybridAdam(model.parameters(),
+                           lr=(config['lr'] * world_size),
+                           weight_decay=0.0)
 
     # Set lr scheduler
     total_steps = len(dataloader) * config['epochs']
@@ -324,19 +315,24 @@ def train():
                                                                   optimizer=optimizer,
                                                                   dataloader=dataloader,
                                                                   lr_scheduler=lr_scheduler)
-    
-    torch.cuda.reset_peak_memory_stats()
-    torch.cuda.empty_cache()
+    # if os.environ['RANK'] == '0':
+    #     from remote_pdb import set_trace
+    #     set_trace()
 
     # Start finetuning
-    logger.info(f"Start finetuning", ranks=[0])
+    # logger.info(f"Start finetuning", ranks=[0])
     for epoch in range(config['epochs']):
-        train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coordinator)
+       train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coordinator, config['grad_accum_steps'])
 
     # Finish training and evaluate
-    logger.info(f"Finish finetuning", ranks=[0])
-    booster.save_model(model, training_args.output_dir, tp_degree=tp_degree)
-    logger.info(f"Saving model checkpoint to {training_args.output_dir}", ranks=[0])
+    # logger.info(f"Finish finetuning", ranks=[0])
+    booster.save_model(model, training_args.output_dir)
+    # logger.info(f"Saving model checkpoint to {training_args.output_dir}", ranks=[0])
+
+    # trainer = Trainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
+    # trainer.train()
+    # trainer.save_state()
+    # trainer.save_model(output_dir=training_args.output_dir)
 
 
 if __name__ == "__main__":

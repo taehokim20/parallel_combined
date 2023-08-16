@@ -10,24 +10,33 @@ from train import ModelArguments, smart_tokenizer_and_embedding_resize, DEFAULT_
 
 import time
 import math
+import colossalai
 from datasets import load_dataset
 from itertools import chain
 from torch.utils.data import DataLoader
-
-import colossalai
-from colossalai.zero import ColoInitContext
-from colossalai.utils import get_current_device, print_rank_0
-from colossalai.tensor import ProcessGroup, ShardSpec, ComputePattern, ComputeSpec
+from colossalai.pipeline.pipelinable import PipelinableContext
 import torch.distributed as dist
+import GPUtil
+import psutil
 
-from transformers import AutoConfig
+from transformers import AutoConfig, AutoTokenizer, default_data_collator
 # LLaMA
 import transformers.models.llama.modeling_llama
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 # OPT
 import transformers.models.opt.modeling_opt
 from transformers.models.opt.modeling_opt import OPTForCausalLM
-import GPUtil
+
+
+def get_size(bytes, suffix="B"):
+    """
+    Scale bytes to its proper format- KB, MB, GB, TB and PB
+    """
+    factor = 1024
+    for unit in ["", "K", "M", "G", "T", "P"]:
+        if bytes < factor:
+            return f"{bytes:.2f}{unit}{suffix}"
+        bytes /= factor
 
 
 @dataclass
@@ -41,7 +50,7 @@ class InferenceArguments:
     metadata={"help": "Load the model in 8-bit mode."},
   )
   inference_dtype: torch.dtype = field(
-    default=torch.bfloat16, #torch.float16,
+    default=torch.float16,
     metadata={"help": "The dtype to use for inference."},
   )
   override_checkpoint: str = field(
@@ -51,25 +60,33 @@ class InferenceArguments:
 
 
 def inference():
-  tp_degree=8
-  colossalai.launch_from_torch(config=dict(parallel=dict(data=1, pipeline=1, tensor=dict(size=tp_degree, mode='1d'))))
   parser = transformers.HfArgumentParser((ModelArguments, InferenceArguments))
   model_args, inference_args = parser.parse_args_into_dataclasses()
+  colossalai.launch_from_torch(config=dict(parallel=dict(data=1, pipeline=8, tensor=dict(size=1, mode='1d'))))
 
-  shard_pg = ProcessGroup(tp_degree=tp_degree)
-  embedding_dist_spec = ShardSpec([-1], [tp_degree])
-  linear_dist_spec = ShardSpec([-1], [tp_degree])
-        
-  with ColoInitContext(device=get_current_device(), embedding_dist_spec=embedding_dist_spec, 
-                       linear_dist_spec=linear_dist_spec, default_pg=shard_pg,
-                       model_name=model_args.model_name_or_path):
+  with PipelinableContext():
     model_config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-    if 'llama' in model_args.model_name_or_path:
+    if 'llama-7b' in model_args.model_name_or_path:
       model = LlamaForCausalLM(model_config)
-    elif 'opt' in model_args.model_name_or_path:
+    elif 'opt-6.7b' in model_args.model_name_or_path:
       model = OPTForCausalLM(model_config)
     model.cuda()
     model.eval()
+  
+  state_dict = {}
+  if 'llama-7b' in model_args.model_name_or_path:  
+    from safetensors.torch import load_file  
+    state_dict.update(load_file("/home/ubuntu/.cache/huggingface/hub/models--huggyllama--llama-7b/snapshots/8416d3fefb0cb3ff5775a7b13c1692d10ff1aa16/model-00001-of-00002.safetensors"))
+    state_dict.update(load_file("/home/ubuntu/.cache/huggingface/hub/models--huggyllama--llama-7b/snapshots/8416d3fefb0cb3ff5775a7b13c1692d10ff1aa16/model-00002-of-00002.safetensors"))
+  elif 'opt-6.7b' in model_args.model_name_or_path:
+    state_dict.update(torch.load("/home/ubuntu/.cache/huggingface/hub/models--facebook--opt-6.7b/snapshots/a45aa65bbeb77c1558bc99bedc6779195462dab0/pytorch_model-00001-of-00002.bin"))
+    state_dict.update(torch.load("/home/ubuntu/.cache/huggingface/hub/models--facebook--opt-6.7b/snapshots/a45aa65bbeb77c1558bc99bedc6779195462dab0/pytorch_model-00002-of-00002.bin"))
+
+  for n, p in model.named_parameters():
+    if 'opt-6.7b' in model_args.model_name_or_path:
+      n = n.replace('model.', '')
+    x = state_dict[n]
+    p.data.copy_(x)
 
   tokenizer = transformers.AutoTokenizer.from_pretrained(
     model_args.model_name_or_path,
@@ -78,26 +95,26 @@ def inference():
   )
 
   if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
-
-  for n, p in model.named_parameters():       
-    if not 'norm' in n and not 'bias' in n:
-      p.compute_spec = ComputeSpec(ComputePattern.TP1D)
+    # ### For size matching of Colossal-AI
+    # tokenizer.pad_token = tokenizer.eos_token
+    ### Other cases
+    smart_tokenizer_and_embedding_resize(
+      special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
+      tokenizer=tokenizer,
+      model=model,
+    )
   ##########################
-  print("Loading override checkpoint.")
-  try:
-    # if dist.get_rank() < tp_degree:
-    #   state_dict = torch.load(inference_args.override_checkpoint + 'shard_' + str(dist.get_rank()) + '.pt')
-    #   model.load_state_dict(state_dict)
-    # else:
-    #   print_rank_0('Skip: {0}'.format(dist.get_rank()))
-    state_dict = torch.load(inference_args.override_checkpoint + 'shard_' + str(dist.get_rank()) + '.pt')
-    model.load_state_dict(state_dict)
-  except:
-    raise Exception("Failed to load checkpoint")
-  model.cuda()
-  model.half()
-  model.eval()
+  if inference_args.override_checkpoint is not None:
+    print("Loading override checkpoint.")
+    try:
+      # state_dict = torch.load(inference_args.override_checkpoint)
+      state_dict = torch.load(inference_args.override_checkpoint + 'pipeline_' + str(dist.get_rank()) + '.pt')
+      model.load_state_dict(state_dict)
+    except:
+      raise Exception("Failed to load checkpoint")
+    model.cuda()
+    model.half()
+    model.eval()
 
   # Get the datasets. Downloading and loading a dataset from the hub.
   dataset_name = "wikitext"
@@ -157,27 +174,35 @@ def inference():
   loss = 0
   total_time = 0
   for step, batch in enumerate(eval_dataloader):
-    with torch.no_grad():
-      batch = {k: v.cuda() for k, v in batch.items()} 
-      # torch.distributed.broadcast(batch['input_ids'], src=0)
-      st_time = time.time()
-      outputs = model(**batch)
-      st_time = time.time() - st_time
-      loss = outputs['loss'].unsqueeze(0)
-      losses.append(loss)
-    # if step > 0:
-    total_time += st_time
-    print_rank_0("Step {0} finished, Loss={1:.2f}, Step time={2:.2f}".format(step, loss.item(), st_time))
+    if dist.get_rank() == 0:
+      with torch.no_grad():
+        batch = {k: v.to(torch.cuda.current_device()) for k, v in batch.items()} 
+        # torch.distributed.broadcast(batch['input_ids'], src=0)
+        st_time = time.time()
+        outputs = model(**batch)
+        st_time = time.time() - st_time
+        loss = outputs['loss'].unsqueeze(0)
+        losses.append(loss)
+      # if step > 0:
+      total_time += st_time
+      print("Step {0} finished, Loss={1:.2f}, Step time={2:.2f}".format(step, loss.item(), st_time))
+    # else:
+    #   with torch.no_grad():
+    #     batch = {k: v.to(torch.cuda.current_device()) for k, v in batch.items()} 
+    #     # torch.distributed.broadcast(batch['input_ids'], src=0)
+    #     outputs = model(**batch)
   
-  losses = torch.cat(losses)
-  losses = losses[:len(eval_dataset)]
-  try:
-    eval_loss = torch.mean(losses)
-    perplexity = math.exp(eval_loss)
-  except OverflowError:
-    perplexity = float("inf")
-  print_rank_0("Total main - Perplexity={0:.2f}, Loss={1:.2f}, Total time={2:.2f}".format(perplexity, eval_loss.item(), total_time))
-  print('Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) 
+  if dist.get_rank() == 0:
+    losses = torch.cat(losses)
+    losses = losses[:len(eval_dataset)]
+    try:
+      eval_loss = torch.mean(losses)
+      perplexity = math.exp(eval_loss)
+    except OverflowError:
+      perplexity = float("inf")
+    print("Total main - Perplexity={0:.2f}, Loss={1:.2f}, Total time={2:.2f}".format(perplexity, eval_loss.item(), total_time))
+    print('Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) 
+    print('Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used)))
 
 
 if __name__ == "__main__":

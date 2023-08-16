@@ -88,10 +88,6 @@ def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coor
 
 
 IGNORE_INDEX = -100
-DEFAULT_PAD_TOKEN = "[PAD]"
-DEFAULT_EOS_TOKEN = "</s>"
-DEFAULT_BOS_TOKEN = "<s>"
-DEFAULT_UNK_TOKEN = "<unk>"
 PROMPT_DICT = {
     "prompt_input": (
         "Below is an instruction that describes a task, paired with an input that provides further context. "
@@ -259,9 +255,6 @@ def train():
     tp_degree=1
     pp_degree=8
     # Launch ColossalAI
-    # # Data Parallelism
-    # colossalai.launch_from_torch(config={})
-    # Tensor Parallelism
     colossalai.launch_from_torch(config=dict(parallel=dict(data=dp_degree, pipeline=pp_degree,
                                 tensor=dict(size=tp_degree, mode='1d'))))
     
@@ -295,14 +288,7 @@ def train():
 
         special_tokens_dict = dict()
         if tokenizer.pad_token is None:
-            # tokenizer.pad_token = tokenizer.eos_token
-            special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN    # "[PAD]" -> only this one is included
-        if tokenizer.eos_token is None:
-            special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN    # "</s>"
-        if tokenizer.bos_token is None:
-            special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN    # "<s>"
-        if tokenizer.unk_token is None:
-            special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN    # "<unk>"
+            tokenizer.pad_token = tokenizer.eos_token
 
         smart_tokenizer_and_embedding_resize(
             special_tokens_dict=special_tokens_dict,
