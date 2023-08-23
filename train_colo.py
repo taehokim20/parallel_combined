@@ -77,9 +77,9 @@ def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coor
     #     #     batch = move_to_cuda(inputs, torch.cuda.current_device())
     #     #     outputs = model(use_cache=False, **batch)
     #     #     loss = outputs['loss']
-    #     #     optimizer.zero_grad()
     #     #     booster.backward(loss, optimizer)
     #     #     optimizer.step()
+    #     #     optimizer.zero_grad()
     #     #     lr_scheduler.step()
     #     #     if dist.get_rank() == 0:
     #     #         with open('temp.txt', 'a') as f:
@@ -99,9 +99,9 @@ def train_epoch(epoch, model, optimizer, lr_scheduler, dataloader, booster, coor
             outputs = model(use_cache=False, **batch)
             loss = outputs['loss']
             # Backward
-            optimizer.zero_grad()
             booster.backward(loss, optimizer)
             optimizer.step()
+            optimizer.zero_grad()
             lr_scheduler.step()
             # Print batch loss
             # pbar.set_postfix({'loss': loss.item(), 'Memory usage': GPUtil.getGPUs()[0].memoryUsed})
