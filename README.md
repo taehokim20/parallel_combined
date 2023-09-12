@@ -1,6 +1,11 @@
 # parallel_combined
 
 ## [Colossal-AI](https://github.com/hpcaitech/ColossalAI)
+* Setup
+  - git clone https://github.com/hpcaitech/ColossalAI.git
+  - cd ColossalAI
+  - cp -r ../parallel_combined/colossalai .
+  - pip install .
 * For fine-tuning, run_colo.sh
   - Running files:
     - Alpaca dataset -> (tensor parallelism) train_colo.py / (data parallelism) train_llama.py / (pipeline parallelism) train_colo_pipeline.py
