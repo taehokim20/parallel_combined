@@ -195,6 +195,16 @@ def get_size(bytes, suffix="B"):
 
 
 def train():
+    # #################################################################
+    # model = transformers.AutoModelForCausalLM.from_pretrained(
+    #     'facebook/opt-2.7b',
+    #     cache_dir=None,
+    # ).to('cuda')
+    # # model.half() # cf. PRECISION_STR_TO_DTYPE = {'fp16': torch.half, 'bf16': torch.bfloat16}
+    # print(GPUtil.getGPUs()[0].memoryUsed)
+    # import sys
+    # sys.exit()
+    # ##################################################################
     parser = transformers.HfArgumentParser((ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
@@ -241,6 +251,7 @@ def train():
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
     ).to('cuda')
+    model.half()
 
     model.gradient_checkpointing_enable()   ###
 
@@ -251,21 +262,22 @@ def train():
         padding_side="right",
         use_fast=False,
     )
-    special_tokens_dict = dict()
+    # special_tokens_dict = dict()
     if tokenizer.pad_token is None:
-        special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
-    if tokenizer.eos_token is None:
-        special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
-    if tokenizer.bos_token is None:
-        special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
-    if tokenizer.unk_token is None:
-        special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
+        tokenizer.pad_token = tokenizer.eos_token
+    #     special_tokens_dict["pad_token"] = DEFAULT_PAD_TOKEN
+    # if tokenizer.eos_token is None:
+    #     special_tokens_dict["eos_token"] = DEFAULT_EOS_TOKEN
+    # if tokenizer.bos_token is None:
+    #     special_tokens_dict["bos_token"] = DEFAULT_BOS_TOKEN
+    # if tokenizer.unk_token is None:
+    #     special_tokens_dict["unk_token"] = DEFAULT_UNK_TOKEN
 
-    smart_tokenizer_and_embedding_resize(
-        special_tokens_dict=special_tokens_dict,
-        tokenizer=tokenizer,
-        model=model,
-    )
+    # smart_tokenizer_and_embedding_resize(
+    #     special_tokens_dict=special_tokens_dict,
+    #     tokenizer=tokenizer,
+    #     model=model,
+    # )
 
     if dist.get_rank() == 0:
         print('[1]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed))    # ZeRO-3: 5449 MB, ZeRO-2: 27625 MB
@@ -286,9 +298,6 @@ def train():
     #     rank=self.args.process_index,
     #     seed=seed,
     # )
-    if dist.get_rank() == 0:
-        print('[2]Used GPU mem: {0}'.format(GPUtil.getGPUs()[0].memoryUsed)) # ZeRO-3: 5394 MB, ZeRO-2: 27625 MB
-        print('[2]Virtual used mem: {0}'.format(get_size(psutil.virtual_memory().used))) # 18.11 GB
     trainer = Trainer(model=model, tokenizer=tokenizer, args=training_args, **data_module)
     trainer.train()
     # trainer.save_state()
